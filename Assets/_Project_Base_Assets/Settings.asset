@@ -45,28 +45,28 @@ MonoBehaviour:
   CameraFollowsRect: 1
   UsePerspectiveCamera: 0
   PerspectiveFOV: 64.5
-  CameraDistance: 202.48
+  CameraDistance: 203.7
   FlipX: 0
-  FlipY: 0
+  FlipY: 1
   UseBounds: 1
   MinMaxRect:
     serializedVersion: 2
-    x: 174.11087
-    y: 185.74751
-    width: 168.98444
-    height: 108.94739
+    x: 254.53287
+    y: 149.61063
+    width: 164.96956
+    height: 117.00723
   Projection:
     serializedVersion: 2
-    x: 174.11087
-    y: 185.74751
-    width: 168.98444
-    height: 108.94739
+    x: 254.53285
+    y: 149.61063
+    width: 164.96956
+    height: 117.00723
   Playground:
     serializedVersion: 2
-    x: 174.11087
-    y: 185.74751
-    width: 168.98444
-    height: 108.94739
+    x: 254.53285
+    y: 149.61063
+    width: 164.96956
+    height: 117.00723
   playgroundManuallySet: 1
   AreaRatio: {x: 1, y: 1}
   CameraOffsetX: 0

@@ -764,7 +764,7 @@ MonoBehaviour:
   captureColor: 0
   captureDepth: 1
   captureInfrared: 1
-  UseTestImages: 1
+  UseTestImages: 0
   ColorTestImage: {fileID: 2800000, guid: f024a1aa1df6776428372a9a8fb352f2, type: 3}
   DepthTestImage: {fileID: 2800000, guid: 389a6bd4d04067b4fb1801048ed32350, type: 3}
   InfraTestImage: {fileID: 2800000, guid: f024a1aa1df6776428372a9a8fb352f2, type: 3}
@@ -1189,6 +1189,7 @@ MonoBehaviour:
   CalibrationKey: 94
   playgroundPlane: {fileID: 1214577558}
   runtimeCamera: {fileID: 1022035143}
+  cameraFitPaddingRatio: 0.15
   originPivot: {fileID: 339288338}
   handleSizeRatio: 0.03
 --- !u!4 &1651192681

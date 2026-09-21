@@ -43,30 +43,30 @@
     "CameraFollowsRect": true,
     "UsePerspectiveCamera": false,
     "PerspectiveFOV": 64.5,
-    "CameraDistance": 202.47999572753907,
+    "CameraDistance": 203.6999969482422,
     "FlipX": false,
-    "FlipY": false,
+    "FlipY": true,
     "UseBounds": true,
     "MinMaxRect": {
         "serializedVersion": "2",
-        "x": 174.11087036132813,
-        "y": 185.7475128173828,
-        "width": 168.98443603515626,
-        "height": 108.9473876953125
+        "x": 254.53286743164063,
+        "y": 149.61062622070313,
+        "width": 164.9695587158203,
+        "height": 117.00723266601563
     },
     "Projection": {
         "serializedVersion": "2",
-        "x": 174.11087036132813,
-        "y": 185.7475128173828,
-        "width": 168.98443603515626,
-        "height": 108.9473876953125
+        "x": 254.53285217285157,
+        "y": 149.61062622070313,
+        "width": 164.9695587158203,
+        "height": 117.00723266601563
     },
     "Playground": {
         "serializedVersion": "2",
-        "x": 174.11087036132813,
-        "y": 185.7475128173828,
-        "width": 168.98443603515626,
-        "height": 108.9473876953125
+        "x": 254.53285217285157,
+        "y": 149.61062622070313,
+        "width": 164.9695587158203,
+        "height": 117.00723266601563
     },
     "playgroundManuallySet": true,
     "AreaRatio": {

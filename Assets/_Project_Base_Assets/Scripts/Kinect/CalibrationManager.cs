@@ -143,6 +143,8 @@ public class CalibrationManager : MonoBehaviour
         SaveSettingsToAsset();
         RestoreCameraPose();
 
+        Settings.NotifySettingsChanged();
+
         Extensions.DebugLog("Playground edit mode <color=magenta>EXITED</color>. Changes saved to Settings asset.");
     }
 
