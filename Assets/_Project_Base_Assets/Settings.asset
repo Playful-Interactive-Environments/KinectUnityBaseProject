@@ -1,0 +1,73 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7370ba3ec98ad494e8233aeb8a3ace90, type: 3}
+  m_Name: Settings
+  m_EditorClassIdentifier: 
+  MarkerDetection:
+    SelectedDictionary: 0
+    AdaptiveThreshWinSizeMin: 3
+    AdaptiveThreshWinSizeMax: 7
+    AdaptiveThreshWinSizeStep: 74
+    AdaptiveThreshConstant: 1
+    MinMarkerPerimeterRate: 0.181
+    MaxMarkerPerimeterRate: 100
+    PolygonalApproxAccuracyRate: 0.404
+    MinCornerDistanceRate: 0.087
+    MinMarkerDistanceRate: 0.08
+    MinDistanceToBorder: 1
+    MarkerBorderBits: 16
+    MinOtsuStdDev: 62
+    PerspectiveRemovePixelPerCell: 17
+    PerspectiveRemoveIgnoredMarginPerCell: 0.498
+    MaxErroneousBitsInBorderRate: 0.063
+    ErrorCorrectionRate: 0.255
+    CornerRefinementMethod: 0
+    CornerRefinementWinSize: 2
+    CornerRefinementMaxIterations: 1
+    CornerRefinementMinAccuracy: 0.01
+    DetectionUpscaleFactor: 1
+    TemporalAverageFrames: 1
+    EnableContrastStretch: 0
+    ContrastStretchClipPercent: 0
+  TargetFrameRate: 30
+  FrameSkipInterval: 0
+  Orientation: 1
+  wallOriginOffset: {x: 0, y: 0, z: 0}
+  CameraFollowsRect: 1
+  UsePerspectiveCamera: 0
+  PerspectiveFOV: 64.5
+  CameraDistance: 202.48
+  FlipX: 0
+  FlipY: 0
+  UseBounds: 1
+  MinMaxRect:
+    serializedVersion: 2
+    x: 167.26385
+    y: 164.46753
+    width: 182.57391
+    height: 148.4623
+  Projection:
+    serializedVersion: 2
+    x: 167.26385
+    y: 164.46751
+    width: 182.57391
+    height: 148.4623
+  Playground:
+    serializedVersion: 2
+    x: 167.26385
+    y: 164.46751
+    width: 182.57391
+    height: 148.4623
+  playgroundManuallySet: 1
+  AreaRatio: {x: 1, y: 1}
+  CameraOffsetX: 0
+  CameraOffsetZ: 0

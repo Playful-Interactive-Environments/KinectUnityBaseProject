@@ -1,0 +1,52 @@
+body {
+    margin: 0;
+    padding: 0;
+    background-color: dimgray;
+}
+
+main {
+    padding: 10mm;
+    height: 277mm;
+    width: 190mm;
+    background-color: white;
+}
+
+.row {
+    display: flex;
+}
+
+.border {
+    position: relative;
+    height: 50mm;
+    width:  50mm;
+    outline: 1px dotted grey;
+}
+
+.image {
+    position: absolute;
+    background-repeat: no-repeat;
+    background-size: 100%;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+
+.marker {
+    height: 50mm;
+    width:  50mm;
+}
+
+#id_000 {
+    background-image: url(000.png);
+}
+#id_001 {
+    background-image: url(001.png);
+}
+#id_002 {
+    background-image: url(002.png);
+}
+#id_003 {
+    background-image: url(003.png);
+}

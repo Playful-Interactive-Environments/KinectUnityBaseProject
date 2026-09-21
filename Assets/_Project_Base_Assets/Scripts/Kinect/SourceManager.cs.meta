@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: a44a94f441d5e734aa15e99707f3b5c1
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - InfraTex: {instanceID: 0}
+  - DepthTex: {instanceID: 0}
+  - CSBlur: {fileID: 7200000, guid: 7715f0972f23acc4abd37d756009b8e7, type: 3}
+  - CSMask: {fileID: 7200000, guid: 7e13b28aded5fa44c9f8fd978e349dc0, type: 3}
+  - Material: {fileID: 2100000, guid: fa13e4b815cd9a44aa2e6b01e740e2d0, type: 2}
+  executionOrder: -210
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

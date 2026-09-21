@@ -1,0 +1,85 @@
+body {
+    margin: 0;
+    padding: 0;
+    background-color: dimgray;
+}
+
+main {
+    height: 1100px;
+    width: 800px;
+    background-color: white;
+}
+
+.row {
+    display: flex;
+}
+
+.border {
+    position: relative;
+    padding: 5mm;
+    height: 60mm;
+    width:  60mm;
+    outline: 1px dotted grey;
+}
+
+.inner {
+    position: relative;
+    margin: 10mm;
+    height: 50mm;
+    width:  50mm;
+    outline: 1px dotted grey;
+}
+
+.image {
+    position: absolute;
+    background-repeat: no-repeat;
+    background-size: 100%;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    margin: auto;
+}
+
+.icon {
+    height: 20mm;
+    width:  20mm;
+}
+
+.marker {
+    height: 60mm;
+    width:  60mm;
+}
+
+.droplet {
+    background-color: #ffbf00;
+}
+.radiation {
+    background-color: #bfff00;
+}
+.waveform {
+    background-color: #00bfff;
+}
+
+#droplet {
+    background-image: url(Droplet.png);
+}
+#radiation {
+    background-image: url(Radiation.png);
+}
+#waveform {
+    background-image: url(Waveform.png);
+}
+
+#id_000 {
+    background-image: url(000.png);
+}
+#id_001 {
+    background-image: url(001.png);
+}
+#id_002 {
+    background-image: url(002.png);
+}
+#id_003 {
+    background-image: url(003.png);
+}

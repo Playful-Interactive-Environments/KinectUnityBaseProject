@@ -1,0 +1,49 @@
+#pragma kernel BoxLinear // 0
+#pragma kernel Gaussian  // 1
+
+Texture2D<float> SourceTexture;
+RWTexture2D<float> OutputTexture;
+
+static const uint mat[5][5] = {
+    {1, 4,  7,  4,  1},
+    {4, 20, 33, 20, 4},
+    {7, 33, 55, 33, 7},
+    {4, 20, 33, 20, 4},
+    {1, 4,  7,  4,  1}
+};
+
+cbuffer onValidate
+{
+    int Radius;
+};
+
+[numthreads(8, 8, 1)]
+void BoxLinear(uint2 id : SV_DispatchThreadID)
+{
+    half col = 0;
+    uint sum = 0;
+
+    for (int x = -Radius; x <= Radius; x++) {
+        for (int y = -Radius; y <= Radius; y++, sum++) {
+            col += SourceTexture[id.xy + int2(x, y)];
+        };
+    };
+
+    OutputTexture[id.xy] = col / sum;
+};
+
+[numthreads(8, 8, 1)]
+void Gaussian(uint2 id : SV_DispatchThreadID)
+{
+    half col = 0;
+    uint sum = 0;
+
+    for (int x = -Radius; x <= Radius; x++) {
+        for (int y = -Radius; y <= Radius; y++) {
+            col += mat[x + 2][y + 2] * SourceTexture[id.xy + int2(x, y)];
+            sum += mat[x + 2][y + 2];
+        };
+    };
+
+    OutputTexture[id.xy] = col / sum;
+};
