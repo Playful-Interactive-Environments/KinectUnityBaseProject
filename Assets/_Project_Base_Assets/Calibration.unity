@@ -761,6 +761,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a44a94f441d5e734aa15e99707f3b5c1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  captureColor: 0
+  captureDepth: 1
+  captureInfrared: 1
   UseTestImages: 1
   ColorTestImage: {fileID: 2800000, guid: f024a1aa1df6776428372a9a8fb352f2, type: 3}
   DepthTestImage: {fileID: 2800000, guid: 389a6bd4d04067b4fb1801048ed32350, type: 3}

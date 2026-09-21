@@ -1,10 +1,137 @@
 ﻿using System;
 using UnityEngine;
 using ArucoUnity.Plugin;
+using System.IO;
+
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 [CreateAssetMenu(menuName = "ScriptableObjects/Settings", fileName = "Settings")]
 public class Settings : ScriptableObject
 {
+    private static string CalibrationFilePath => System.IO.Path.Combine(Application.streamingAssetsPath, "settings.json");
+
+    private bool hasLoadedFromFile;
+
+    // Called by any consumer that needs guaranteed-loaded Settings before reading from it.
+    // Idempotent — safe to call from multiple components' Awake/OnEnable without re-reading
+    // the file or double-firing OnSettingsChanged, regardless of which component runs first.
+    //
+    // In the Editor, the Settings asset (as edited in the Inspector) is always treated as the
+    // source of truth: settings.json is regenerated FROM the asset every session, rather than
+    // risking a stale json silently overriding an Inspector edit. In a standalone build, there's
+    // no Inspector to be authoritative instead, so the shipped/previously-saved json is loaded
+    // normally (or seeded from the asset's build-time values, the first time it runs).
+    public void EnsureLoaded()
+    {
+        if (hasLoadedFromFile) return;
+        hasLoadedFromFile = true;
+
+        #if UNITY_EDITOR
+                SaveToFile();
+        #else
+            LoadOrCreateFile();
+        #endif
+    }
+
+    public void SaveToFile()
+    {
+        try
+        {
+            string dir = Path.GetDirectoryName(CalibrationFilePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            string json = JsonUtility.ToJson(this, prettyPrint: true);
+            json = InjectDictionaryComment(json);
+            File.WriteAllText(CalibrationFilePath, json);
+            Extensions.DebugLog($"Settings saved to <color=magenta>{CalibrationFilePath}</color>.");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Settings: Failed to save settings file. {e}");
+        }
+    }
+
+    public void LoadFromFile()
+    {
+        if (!File.Exists(CalibrationFilePath)) return;
+
+        try
+        {
+            string json = File.ReadAllText(CalibrationFilePath);
+            json = StripCommentLines(json);
+            JsonUtility.FromJsonOverwrite(json, this);
+            OnSettingsChanged?.Invoke();
+            Extensions.DebugLog($"Settings loaded from <color=magenta>{CalibrationFilePath}</color>.");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Settings: Failed to load settings file. {e}");
+        }
+    }
+
+    // Loads settings.json if it exists; otherwise seeds one from this asset's current values,
+    // so there's always a file to load/edit from this point on, in-editor or in a build.
+    public void LoadOrCreateFile()
+    {
+        if (File.Exists(CalibrationFilePath))
+        {
+            LoadFromFile();
+        }
+        else
+        {
+            SaveToFile();
+            Extensions.DebugLog($"No settings.json found — created a default at <color=magenta>{CalibrationFilePath}</color>.");
+        }
+    }
+
+    private const string DictionaryCommentBlock =
+    "// Aruco.PredefinedDictionaryName int values (fixed by ArucoUnity/OpenCV declaration order):\n" +
+    "//  0 = Dict4x4_50      1 = Dict4x4_100     2 = Dict4x4_250     3 = Dict4x4_1000\n" +
+    "//  4 = Dict5x5_50      5 = Dict5x5_100     6 = Dict5x5_250     7 = Dict5x5_1000\n" +
+    "//  8 = Dict6x6_50      9 = Dict6x6_100    10 = Dict6x6_250    11 = Dict6x6_1000\n" +
+    "// 12 = Dict7x7_50     13 = Dict7x7_100    14 = Dict7x7_250    15 = Dict7x7_1000\n" +
+    "// 16 = DictArucoOriginal";
+
+    // JsonUtility's output has no comment support and standard JSON doesn't allow comments at
+    // all, so this makes settings.json technically non-standard — LoadFromFile strips these
+    // lines back out before parsing, so it's only ever meant to be read by this class (or a
+    // human skimming the file), not by a strict external JSON parser.
+    private static string InjectDictionaryComment(string json)
+    {
+        const string marker = "\"SelectedDictionary\":";
+        int idx = json.IndexOf(marker, StringComparison.Ordinal);
+        if (idx < 0) return json;
+
+        int lineStart = json.LastIndexOf('\n', idx);
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+        string indent = "";
+        for (int i = lineStart; i < idx && (json[i] == ' ' || json[i] == '\t'); i++)
+            indent += json[i];
+
+        string indentedComment = string.Join("\n", Array.ConvertAll(
+            DictionaryCommentBlock.Split('\n'), line => indent + line));
+
+        return json.Insert(lineStart, indentedComment + "\n");
+    }
+
+    private static string StripCommentLines(string json)
+    {
+        var lines = json.Split('\n');
+        var kept = new System.Collections.Generic.List<string>();
+        foreach (var line in lines)
+        {
+            if (line.TrimStart().StartsWith("//")) continue;
+            kept.Add(line);
+        }
+        return string.Join("\n", kept);
+    }
+
     /// <summary>
     /// All ArUco detector tuning in one place, shared by every ArucoDetector instance that
     /// references this Settings asset — tune once here instead of per-component. Was
@@ -16,6 +143,12 @@ public class Settings : ScriptableObject
     public class ArucoDetectionSettings
     {
         [Header("Dictionary")]
+        // Aruco.PredefinedDictionaryName int values (fixed by ArucoUnity/OpenCV declaration order):
+        //  0 = Dict4x4_50      1 = Dict4x4_100     2 = Dict4x4_250     3 = Dict4x4_1000
+        //  4 = Dict5x5_50      5 = Dict5x5_100     6 = Dict5x5_250     7 = Dict5x5_1000
+        //  8 = Dict6x6_50      9 = Dict6x6_100    10 = Dict6x6_250    11 = Dict6x6_1000
+        // 12 = Dict7x7_50     13 = Dict7x7_100    14 = Dict7x7_250    15 = Dict7x7_1000
+        // 16 = DictArucoOriginal
         public Aruco.PredefinedDictionaryName SelectedDictionary = Aruco.PredefinedDictionaryName.Dict4x4_50;
 
         [Header("Thresholding")]
@@ -174,6 +307,15 @@ public class Settings : ScriptableObject
         OnSettingsChanged?.Invoke();
     }
 
+    // Lets external code (e.g. CalibrationManager loading a saved JSON snapshot via
+    // JsonUtility.FromJsonOverwrite, which writes fields directly and bypasses every setter
+    // below) notify listeners after the fact, since OnSettingsChanged can only be invoked from
+    // within this class.
+    public void NotifySettingsChanged()
+    {
+        OnSettingsChanged?.Invoke();
+    }
+
     // Sets Playground directly, bypassing the MinMaxRect/AreaRatio derivation in OnValidate()
     // (which would otherwise silently overwrite a manually-dragged rect). Used by the
     // interactive playground editor in CalibrationManager.
@@ -196,6 +338,34 @@ public class Settings : ScriptableObject
         OnSettingsChanged?.Invoke();
     }
 
+    // Sets Playground directly, bypassing the MinMaxRect/AreaRatio derivation in OnValidate()
+    // (which would otherwise silently overwrite a manually-dragged rect). Used by the
+    // interactive playground editor in CalibrationManager.
+    //
+    // markManual: true (default) permanently disables the MinMaxRect/AreaRatio auto-derivation
+    // for this asset, as a real drag edit should. Pass false when restoring a previously-saved
+    // rect (e.g. loading calibration from a JSON file on startup) without changing that flag's
+    // existing state, so a build that loads saved calibration doesn't silently and permanently
+    // disable auto-derivation the first time it starts up.
+    public void SetPlaygroundManual(Rect playground, bool markManual = true)
+    {
+        Playground = playground;
+        Projection = playground;
+
+        MinMaxRect = new Rect
+        {
+            size = playground.size,
+            center = playground.center + new Vector2(CameraOffsetX, CameraOffsetZ)
+        };
+
+        if (markManual)
+        {
+            playgroundManuallySet = true;
+        }
+
+        OnSettingsChanged?.Invoke();
+    }
+
     public void SetOrientation(PlaneOrientation orientation)
     {
         Orientation = orientation;
@@ -205,5 +375,11 @@ public class Settings : ScriptableObject
     public void CycleOrientation()
     {
         SetOrientation(Orientation == PlaneOrientation.Floor ? PlaneOrientation.Wall : PlaneOrientation.Floor);
+    }
+
+    public void SetWallOriginOffset(Vector3 offset)
+    {
+        wallOriginOffset = offset;
+        OnSettingsChanged?.Invoke();
     }
 }

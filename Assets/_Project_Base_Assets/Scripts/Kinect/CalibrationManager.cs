@@ -21,12 +21,15 @@ public class CalibrationManager : MonoBehaviour
     [Tooltip("Camera used to raycast the mouse onto the ground plane at runtime. Defaults to Camera.main.")]
     [SerializeField] private Camera runtimeCamera;
 
+    [Tooltip("Extra world-space margin added around the playground rect + handle knobs when auto-framing the camera in edit mode.")]
+    [Range(0f, 1f)]
+    [SerializeField] private float cameraFitPaddingRatio = 0.15f;
+
     [SerializeField] private Transform originPivot;
 
     [Tooltip("Handle knob size as a fraction of the rect's largest dimension. Shared by both the drawn gizmo spheres and their hover/click hit radius, so they always match visually.")]
     [Range(0.01f, 0.2f)]
     [SerializeField] private float handleSizeRatio = 0.03f;
-
 
     private enum DragHandle { None, Move, Left, Right, Top, Bottom }
 
@@ -42,17 +45,34 @@ public class CalibrationManager : MonoBehaviour
     private Quaternion dragCamRotation;
     private Vector3 dragOrigin, dragNormal, dragAxisX, dragAxisY;
 
+    private bool cachedCameraPoseValid;
+    private Vector3 cachedCamPosition;
+    private Quaternion cachedCamRotation;
+    private bool cachedCamOrthographic;
+    private float cachedCamOrthoSize;
+    private float cachedCamFov;
+
+
+    [System.Serializable]
+    private class CalibrationSnapshot
+    {
+        public float playgroundX, playgroundY, playgroundWidth, playgroundHeight;
+        public Settings.PlaneOrientation orientation;
+        public Vector3 wallOriginOffset;
+    }
+
     private void OnEnable()
     {
         if (Settings != null)
         {
+            Settings.EnsureLoaded();
             Settings.OnSettingsChanged += HandleSettingsChanged;
             currentOrientation = Settings.Orientation;
         }
 
-#if UNITY_EDITOR
-        SceneView.duringSceneGui += OnSceneGUI;
-#endif
+        #if UNITY_EDITOR
+                SceneView.duringSceneGui += OnSceneGUI;
+        #endif
     }
 
     private void OnDisable()
@@ -108,6 +128,10 @@ public class CalibrationManager : MonoBehaviour
     {
         isEditModeActive = true;
         activeDragHandle = DragHandle.None;
+
+        CacheCameraPose();
+        FitCameraToPlayground();
+
         Extensions.DebugLog("Playground edit mode <color=magenta>ENTERED</color>. Drag the rect to move it, drag an edge to resize. Press F1 to exit.");
     }
 
@@ -117,8 +141,88 @@ public class CalibrationManager : MonoBehaviour
         activeDragHandle = DragHandle.None;
 
         SaveSettingsToAsset();
+        RestoreCameraPose();
 
         Extensions.DebugLog("Playground edit mode <color=magenta>EXITED</color>. Changes saved to Settings asset.");
+    }
+
+    private void CacheCameraPose()
+    {
+        Camera cam = runtimeCamera != null ? runtimeCamera : Camera.main;
+        if (cam == null)
+        {
+            cachedCameraPoseValid = false;
+            return;
+        }
+
+        cachedCamPosition = cam.transform.position;
+        cachedCamRotation = cam.transform.rotation;
+        cachedCamOrthographic = cam.orthographic;
+        cachedCamOrthoSize = cam.orthographicSize;
+        cachedCamFov = cam.fieldOfView;
+        cachedCameraPoseValid = true;
+    }
+
+    private void RestoreCameraPose()
+    {
+        if (!cachedCameraPoseValid) return;
+
+        Camera cam = runtimeCamera != null ? runtimeCamera : Camera.main;
+        if (cam == null) { cachedCameraPoseValid = false; return; }
+
+        cam.transform.SetPositionAndRotation(cachedCamPosition, cachedCamRotation);
+        if (cachedCamOrthographic) cam.orthographicSize = cachedCamOrthoSize;
+        else cam.fieldOfView = cachedCamFov;
+
+        cachedCameraPoseValid = false;
+    }
+
+    // Frames the camera so the playground rect (plus its handle knobs, plus padding) stays fully
+    // visible regardless of rect size/aspect or the camera's own type (ortho vs perspective) or
+    // aspect ratio. Orthographic: adjusts orthographicSize, keeps existing viewing distance along
+    // the plane normal. Perspective: keeps FOV, dollies the camera along the normal to a distance
+    // that fits both the vertical and horizontal extents.
+    private void FitCameraToPlayground()
+    {
+        Camera cam = runtimeCamera != null ? runtimeCamera : Camera.main;
+        if (cam == null || Settings == null) return;
+
+        GetPlaneBasis(out Vector3 origin, out Vector3 normal, out Vector3 axisX, out Vector3 axisY);
+
+        Rect rect = Settings.Playground;
+        Vector3 center = LocalToWorld(new Vector2(rect.center.x, rect.center.y), origin, axisX, axisY);
+
+        // Pad by the handle knob radius so a handle sitting exactly on the rect edge doesn't clip
+        // at the frustum border, then add the configurable extra margin on top.
+        float handlePad = GetHandleRadius(rect);
+        float padding = 1f + cameraFitPaddingRatio;
+        float halfW = (rect.width * 0.5f + handlePad) * padding;
+        float halfH = (rect.height * 0.5f + handlePad) * padding;
+
+        float aspect = cam.aspect;
+
+        if (cam.orthographic)
+        {
+            // Any distance along the normal frames the same view for an orthographic camera —
+            // preserve the current one (falling back to a safe default) rather than picking an
+            // arbitrary value that could clip through near/far planes.
+            float currentDistance = Vector3.Dot(cam.transform.position - origin, normal);
+            if (currentDistance < 0.01f) currentDistance = 10f;
+
+            cam.orthographicSize = Mathf.Max(halfH, halfW / aspect);
+            cam.transform.SetPositionAndRotation(center + normal * currentDistance, Quaternion.LookRotation(-normal, axisY));
+        }
+        else
+        {
+            float vFovRad = cam.fieldOfView * Mathf.Deg2Rad;
+            float distV = halfH / Mathf.Tan(vFovRad * 0.5f);
+
+            float hFovRad = 2f * Mathf.Atan(Mathf.Tan(vFovRad * 0.5f) * aspect);
+            float distH = halfW / Mathf.Tan(hFovRad * 0.5f);
+
+            float distance = Mathf.Max(distV, distH);
+            cam.transform.SetPositionAndRotation(center + normal * distance, Quaternion.LookRotation(-normal, axisY));
+        }
     }
 
     private void SaveSettingsToAsset()
@@ -131,15 +235,17 @@ public class CalibrationManager : MonoBehaviour
 #if UNITY_EDITOR
         EditorUtility.SetDirty(Settings);
         AssetDatabase.SaveAssets();
-#else
-        Extensions.DebugLog("Playground edit mode changes only persist to the Settings asset in the Editor - a standalone build needs its own save path (e.g. serialize to a runtime file).");
 #endif
+
+        Settings.SaveToFile();
     }
+
 
     private void CycleOrientation()
     {
         activeDragHandle = DragHandle.None;
-        Settings.CycleOrientation(); // fires OnSettingsChanged -> HandleSettingsChanged updates currentOrientation
+        Settings.CycleOrientation();
+        FitCameraToPlayground();
         Extensions.DebugLog($"Playground orientation switched to <color=magenta>{currentOrientation}</color>.");
     }
 
@@ -231,9 +337,10 @@ public class CalibrationManager : MonoBehaviour
                 Vector2 mouseLocalDrag = WorldToLocal(dragWorldPoint, dragOrigin, dragAxisX, dragAxisY);
                 Vector2 delta = mouseLocalDrag - dragStartMouseWorld;
                 Settings.SetPlaygroundManual(ApplyDrag(dragStartRect, activeDragHandle, delta));
+                FitCameraToPlayground(); // keep handles in frame as the rect resizes
 
                 #if UNITY_EDITOR
-                    EditorUtility.SetDirty(Settings);
+                  EditorUtility.SetDirty(Settings);
                 #endif
             }
         }

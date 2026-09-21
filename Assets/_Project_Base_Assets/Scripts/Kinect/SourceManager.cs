@@ -2,6 +2,8 @@
 using System.Collections;
 using Windows.Kinect;
 using System;
+using System.Collections.Generic;
+
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -30,16 +32,36 @@ public class SourceManager : MonoBehaviour
     public Texture2D InfraTex { get; private set; }
     public bool IsInitialized { get; private set; }
 
+    [Header("Stream Enable")]
+    [SerializeField] private bool captureColor = true;
+    [SerializeField] private bool captureDepth = true;
+    [SerializeField] private bool captureInfrared = true;
+
     // Lets any consumer (ArucoDetector, HandDetector, viewers, ...) grab a texture by mode
     // directly from the source, without depending on each other or on a display component.
     public Texture2D GetTexture(SourceMode mode)
     {
-        switch (mode)
+        bool active = mode switch
         {
-            case SourceMode.Infrared: return InfraTex;
-            case SourceMode.Color: return ColorTex;
-            default: return DepthTex;
+            SourceMode.Infrared => captureInfraredActive,
+            SourceMode.Color => captureColorActive,
+            _ => captureDepthActive
+        };
+
+        if (!active && !warnedModes.Contains(mode))
+        {
+            warnedModes.Add(mode);
+            Debug.LogWarning($"SourceManager: GetTexture({mode}) was requested, but that stream is disabled " +
+                              $"(capture{mode} is off or its texture was never created). The returned texture " +
+                              $"will be stale or null. Enable capture{mode} if this stream is actually needed.");
         }
+
+        return mode switch
+        {
+            SourceMode.Infrared => InfraTex,
+            SourceMode.Color => ColorTex,
+            _ => DepthTex
+        };
     }
 
     [Header("Debug & Testing")]
@@ -61,8 +83,8 @@ public class SourceManager : MonoBehaviour
     [SerializeField, Range(0, 200)] private byte DisplacementPower = 0;
     [SerializeField, Range(1, 8000)] private ushort DepthMin = 500, DepthMax = 4000;
 
-    public int SourceWidth => DepthTex != null ? DepthTex.width : (InfraTex != null ? InfraTex.width : 512);
-    public int SourceHeight => DepthTex != null ? DepthTex.height : (InfraTex != null ? InfraTex.height : 424);
+    public int SourceWidth => DepthTex != null ? DepthTex.width : (InfraTex != null ? InfraTex.width : (ColorTex != null ? ColorTex.width : 512));
+    public int SourceHeight => DepthTex != null ? DepthTex.height : (InfraTex != null ? InfraTex.height : (ColorTex != null ? ColorTex.height : 424));
 
     private RenderTexture rTexture;
     private bool isReadbackPending = false;
@@ -70,6 +92,11 @@ public class SourceManager : MonoBehaviour
     private ushort[] rawDepthArray; // Updated every frame from Kinect or Readback
     private int depthWidth = 512;   // Kinect depth width
     private int depthHeight = 424;  // Kinect depth height
+
+    private bool captureColorActive;
+    private bool captureDepthActive;
+    private bool captureInfraredActive;
+    private readonly HashSet<SourceMode> warnedModes = new HashSet<SourceMode>();
 
     public float GetRawDepth(float x, float z)
     {
@@ -88,6 +115,7 @@ public class SourceManager : MonoBehaviour
     private void Awake()
     {
         instance = this;
+        Settings?.EnsureLoaded();
     }
 
     private void OnEnable()
@@ -133,16 +161,29 @@ public class SourceManager : MonoBehaviour
 
         if (kinectAvailable && !UseTestImages)
         {
-            Reader = Sensor.OpenMultiSourceFrameReader(FrameSourceTypes.Color | FrameSourceTypes.Depth | FrameSourceTypes.Infrared);
+            Reader = Sensor.OpenMultiSourceFrameReader(
+                (captureColor ? FrameSourceTypes.Color : 0) |
+                (captureDepth ? FrameSourceTypes.Depth : 0) |
+                (captureInfrared ? FrameSourceTypes.Infrared : 0)
+            );
 
-            var colorDesc = Sensor.ColorFrameSource.CreateFrameDescription(ColorImageFormat.RGBA);
-            ColorTex = Extensions.CreateTexture(colorDesc.Width, colorDesc.Height, TextureFormat.RGBA32);
+            if (captureColor)
+            {
+                var colorDesc = Sensor.ColorFrameSource.CreateFrameDescription(ColorImageFormat.RGBA);
+                ColorTex = Extensions.CreateTexture(colorDesc.Width, colorDesc.Height, TextureFormat.RGBA32);
+            }
 
-            var depthDesc = Sensor.DepthFrameSource.FrameDescription;
-            DepthTex = Extensions.CreateTexture(depthDesc.Width, depthDesc.Height, TextureFormat.R16);
+            if (captureDepth)
+            {
+                var depthDesc = Sensor.DepthFrameSource.FrameDescription;
+                DepthTex = Extensions.CreateTexture(depthDesc.Width, depthDesc.Height, TextureFormat.R16);
+            }
 
-            var infraDesc = Sensor.InfraredFrameSource.FrameDescription;
-            InfraTex = Extensions.CreateTexture(infraDesc.Width, infraDesc.Height, TextureFormat.R16);
+            if (captureInfrared)
+            {
+                var infraDesc = Sensor.InfraredFrameSource.FrameDescription;
+                InfraTex = Extensions.CreateTexture(infraDesc.Width, infraDesc.Height, TextureFormat.R16);
+            }
 
             if (!Sensor.IsOpen) Sensor.Open();
         }
@@ -160,6 +201,10 @@ public class SourceManager : MonoBehaviour
             if (InfraTestImage != null)
                 InfraTex = Instantiate(InfraTestImage);
         }
+
+        captureColorActive = captureColor && ColorTex != null;
+        captureDepthActive = captureDepth && DepthTex != null;
+        captureInfraredActive = captureInfrared && InfraTex != null;
 
         IsInitialized = true;
         AnnounceTexturesInitialized();
@@ -198,43 +243,43 @@ public class SourceManager : MonoBehaviour
                     var frame = Reader.AcquireLatestFrame();
                     if (frame != null)
                     {
-                        using (var colorFrame = frame.ColorFrameReference.AcquireFrame())
+                        if (captureColor)
                         {
-                            if (colorFrame != null && colorData != null)
+                            using (var colorFrame = frame.ColorFrameReference.AcquireFrame())
                             {
-                                colorFrame.CopyConvertedFrameDataToArray(colorData, ColorImageFormat.RGBA);
-                                ColorTex.SetPixelData(colorData, 0);
-                                ColorTex.Apply(false); // no mipmaps needed for a point-filtered raw sensor feed
+                                if (colorFrame != null && colorData != null)
+                                {
+                                    colorFrame.CopyConvertedFrameDataToArray(colorData, ColorImageFormat.RGBA);
+                                    ColorTex.SetPixelData(colorData, 0);
+                                    ColorTex.Apply(false);
+                                }
                             }
                         }
 
-                        //using (var depthFrame = frame.DepthFrameReference.AcquireFrame())
-                        //{
-                        //    if (depthFrame != null && depthData != null)
-                        //    {
-                        //        depthFrame.CopyFrameDataToArray(depthData);
-
-                        //        // Retain depth data reference for PointToDepth lookup
-                        //        if (rawDepthArray == null || rawDepthArray.Length != depthData.Length)
-                        //        {
-                        //            rawDepthArray = new ushort[depthData.Length];
-                        //        }
-
-                        //        ProcessDepthData(depthData, DepthTex.width, DepthTex.height);
-
-                        //        DepthTex.SetPixelData(depthData, 0);
-                        //        DepthTex.Apply(false);
-                        //    }
-                        //}
-
-                        using (var depthFrame = frame.DepthFrameReference.AcquireFrame())
+                        if (captureDepth)
                         {
-                            if (depthFrame != null && depthData != null)
+                            using (var depthFrame = frame.DepthFrameReference.AcquireFrame())
                             {
-                                depthFrame.CopyFrameDataToArray(depthData);
-                                ProcessDepthData(depthData, DepthTex.width, DepthTex.height);
-                                DepthTex.SetPixelData(depthData, 0);
-                                DepthTex.Apply(false);
+                                if (depthFrame != null && depthData != null)
+                                {
+                                    depthFrame.CopyFrameDataToArray(depthData);
+                                    ProcessDepthData(depthData, DepthTex.width, DepthTex.height);
+                                    DepthTex.SetPixelData(depthData, 0);
+                                    DepthTex.Apply(false);
+                                }
+                            }
+                        }
+
+                        if (captureInfrared)
+                        {
+                            using (var infraFrame = frame.InfraredFrameReference.AcquireFrame())
+                            {
+                                if (infraFrame != null && infraData != null)
+                                {
+                                    infraFrame.CopyFrameDataToArray(infraData);
+                                    InfraTex.SetPixelData(infraData, 0);
+                                    InfraTex.Apply(false);
+                                }
                             }
                         }
 

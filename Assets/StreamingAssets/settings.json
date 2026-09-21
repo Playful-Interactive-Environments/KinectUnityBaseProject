@@ -1,0 +1,78 @@
+{
+    "MarkerDetection": {
+        // Aruco.PredefinedDictionaryName int values (fixed by ArucoUnity/OpenCV declaration order):
+        //  0 = Dict4x4_50      1 = Dict4x4_100     2 = Dict4x4_250     3 = Dict4x4_1000
+        //  4 = Dict5x5_50      5 = Dict5x5_100     6 = Dict5x5_250     7 = Dict5x5_1000
+        //  8 = Dict6x6_50      9 = Dict6x6_100    10 = Dict6x6_250    11 = Dict6x6_1000
+        // 12 = Dict7x7_50     13 = Dict7x7_100    14 = Dict7x7_250    15 = Dict7x7_1000
+        // 16 = DictArucoOriginal
+        "SelectedDictionary": 0,
+        "AdaptiveThreshWinSizeMin": 3,
+        "AdaptiveThreshWinSizeMax": 7,
+        "AdaptiveThreshWinSizeStep": 74,
+        "AdaptiveThreshConstant": 1,
+        "MinMarkerPerimeterRate": 0.1809999942779541,
+        "MaxMarkerPerimeterRate": 100.0,
+        "PolygonalApproxAccuracyRate": 0.40400001406669619,
+        "MinCornerDistanceRate": 0.08699999749660492,
+        "MinMarkerDistanceRate": 0.07999999821186066,
+        "MinDistanceToBorder": 1,
+        "MarkerBorderBits": 16,
+        "MinOtsuStdDev": 62,
+        "PerspectiveRemovePixelPerCell": 17,
+        "PerspectiveRemoveIgnoredMarginPerCell": 0.49799999594688418,
+        "MaxErroneousBitsInBorderRate": 0.06300000101327896,
+        "ErrorCorrectionRate": 0.2549999952316284,
+        "CornerRefinementMethod": 0,
+        "CornerRefinementWinSize": 2,
+        "CornerRefinementMaxIterations": 1,
+        "CornerRefinementMinAccuracy": 0.009999999776482582,
+        "DetectionUpscaleFactor": 1,
+        "TemporalAverageFrames": 1,
+        "EnableContrastStretch": false,
+        "ContrastStretchClipPercent": 0.0
+    },
+    "TargetFrameRate": 30,
+    "FrameSkipInterval": 0,
+    "Orientation": 0,
+    "wallOriginOffset": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+    },
+    "CameraFollowsRect": true,
+    "UsePerspectiveCamera": false,
+    "PerspectiveFOV": 64.5,
+    "CameraDistance": 202.47999572753907,
+    "FlipX": false,
+    "FlipY": false,
+    "UseBounds": true,
+    "MinMaxRect": {
+        "serializedVersion": "2",
+        "x": 174.11087036132813,
+        "y": 185.7475128173828,
+        "width": 168.98443603515626,
+        "height": 108.9473876953125
+    },
+    "Projection": {
+        "serializedVersion": "2",
+        "x": 174.11087036132813,
+        "y": 185.7475128173828,
+        "width": 168.98443603515626,
+        "height": 108.9473876953125
+    },
+    "Playground": {
+        "serializedVersion": "2",
+        "x": 174.11087036132813,
+        "y": 185.7475128173828,
+        "width": 168.98443603515626,
+        "height": 108.9473876953125
+    },
+    "playgroundManuallySet": true,
+    "AreaRatio": {
+        "x": 1.0,
+        "y": 1.0
+    },
+    "CameraOffsetX": 0.0,
+    "CameraOffsetZ": 0.0
+}
