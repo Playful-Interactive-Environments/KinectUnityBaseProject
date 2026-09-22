@@ -40,6 +40,8 @@ public class CameraManager : MonoBehaviour
 
     private void ApplyCameraSettings()
     {
+        if (settings == null) return;
+
         OrientationUtility.GetPlaneBasis(settings.Orientation, originPivot, out Vector3 origin, out Vector3 normal, out Vector3 axisX, out Vector3 axisY);
 
         if (settings.Orientation == Settings.PlaneOrientation.Wall)
@@ -70,13 +72,11 @@ public class CameraManager : MonoBehaviour
             basePosition = OrientationUtility.LocalToWorld(new Vector2(width / 2f, height / 2f), origin, axisX, axisY);
         }
 
-
-
+        // Set position along plane normal
         transform.position = basePosition + normal * settings.CameraDistance;
 
-        transform.rotation = settings.Orientation == Settings.PlaneOrientation.Wall
-        ? Quaternion.LookRotation(-normal, Vector3.up)
-        : floorRotation;
-
+        // Set rotation directly from plane basis vectors for both Floor and Wall
+        Vector3 upVector = (settings.Orientation == Settings.PlaneOrientation.Wall) ? Vector3.up : axisY;
+        transform.rotation = Quaternion.LookRotation(-normal, upVector);
     }
 }

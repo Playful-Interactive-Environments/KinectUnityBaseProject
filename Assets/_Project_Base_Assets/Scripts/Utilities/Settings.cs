@@ -14,6 +14,8 @@ public class Settings : ScriptableObject
 
     private bool hasLoadedFromFile;
 
+    public static Settings instance;
+
     // Called by any consumer that needs guaranteed-loaded Settings before reading from it.
     // Idempotent — safe to call from multiple components' Awake/OnEnable without re-reading
     // the file or double-firing OnSettingsChanged, regardless of which component runs first.
@@ -25,14 +27,39 @@ public class Settings : ScriptableObject
     // normally (or seeded from the asset's build-time values, the first time it runs).
     public void EnsureLoaded()
     {
-        if (hasLoadedFromFile) return;
-        hasLoadedFromFile = true;
+        // Ensure singleton reference is maintained
+        if (instance != null && instance != this)
+        {
+            Debug.LogWarning($"[Settings] Multiple Settings instances detected! Overwriting active instance with '{this.name}'.");
+        }
 
-        #if UNITY_EDITOR
-                SaveToFile();
-        #else
-            LoadOrCreateFile();
-        #endif
+        instance = this;
+
+        // Skip redundant file reads during the same runtime session
+        if (hasLoadedFromFile) return;
+
+#if UNITY_EDITOR
+        // In Editor, check if file exists first. If so, load it so external edits aren't wiped out.
+        // If it doesn't exist, generate the default json file.
+        if (File.Exists(CalibrationFilePath))
+        {
+            LoadFromFile();
+        }
+        else
+        {
+            SaveToFile();
+        }
+#else
+    LoadOrCreateFile();
+#endif
+
+        hasLoadedFromFile = true;
+    }
+
+    private void OnEnable()
+    {
+        // Reset state on domain reloads or when instantiated
+        hasLoadedFromFile = false;
     }
 
     public void SaveToFile()
@@ -263,9 +290,7 @@ public class Settings : ScriptableObject
     [Min(0.25f), Tooltip("Ratio of the playground to the projection area.")]
     public Vector2 AreaRatio = Vector2.one;
 
-    [Header("Fine Adjustment")]
-    [Range(-50, 50)] public float CameraOffsetX;
-    [Range(-50, 50)] public float CameraOffsetZ;
+
     // -------------------------------------------------------------------------
 
     public void SetMinMaxRectToResolution(int width, int height)
@@ -293,7 +318,7 @@ public class Settings : ScriptableObject
             Projection = new Rect()
             {
                 size = MinMaxRect.size,
-                center = MinMaxRect.center - new Vector2(CameraOffsetX, CameraOffsetZ)
+                center = MinMaxRect.center
             };
 
             Playground = new Rect()
@@ -331,7 +356,7 @@ public class Settings : ScriptableObject
         MinMaxRect = new Rect
         {
             size = playground.size,
-            center = playground.center + new Vector2(CameraOffsetX, CameraOffsetZ)
+            center = playground.center
         };
 
         playgroundManuallySet = true;
@@ -355,7 +380,7 @@ public class Settings : ScriptableObject
         MinMaxRect = new Rect
         {
             size = playground.size,
-            center = playground.center + new Vector2(CameraOffsetX, CameraOffsetZ)
+            center = playground.center
         };
 
         if (markManual)

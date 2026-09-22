@@ -94,7 +94,7 @@ public static class PlaygroundMapping
             pz = fullHeight - 1 - pz;
         }
 
-        float depth = SourceManager.instance != null ? SourceManager.instance.GetRawDepth(px, pz) : 0f;
+        float depth = SourceManager.instance != null ? SourceManager.instance.GetHeightAbovePlane(px, pz) : 0f;
 
         if (playgroundPlane == null)
         {
@@ -116,6 +116,38 @@ public static class PlaygroundMapping
     public static Vector3 PixelToWorldF(float localX, float localY, CropRect crop, int fullWidth, int fullHeight, Settings settings, PlaygroundPlane playgroundPlane)
     {
         return PixelToWorld(localX, localY, crop, fullWidth, fullHeight, settings, playgroundPlane);
+    }
+
+    /// <summary>
+    /// Crop rect in DISPLAY space (the space of a texture that was cropped + flipped on the GPU).
+    /// GetCropBounds returns the sensor-space rect; this mirrors its origin back when flip is on.
+    /// </summary>
+    public static CropRect GetDisplayCropBounds(Settings settings, int fullWidth, int fullHeight)
+    {
+        CropRect c = GetCropBounds(settings, fullWidth, fullHeight);
+        if (settings != null && settings.FlipX) c.X = fullWidth - c.X - c.Width;
+        if (settings != null && settings.FlipY) c.Y = fullHeight - c.Y - c.Height;
+        return c;
+    }
+
+    /// <summary>
+    /// Pixel of an already cropped + flipped texture -> world position on the PlaygroundPlane.
+    /// localY is counted from the BOTTOM row (memory order of the prepared texture).
+    /// </summary>
+    public static Vector3 PreparedPixelToWorld(float localX, float localY, SourceManager.PreparedRegion region, PlaygroundPlane playgroundPlane)
+    {
+        float px = region.DisplayCrop.X + localX;
+        float pz = region.DisplayCrop.Y + localY;
+
+        float height = SourceManager.instance != null ? SourceManager.instance.GetHeightAbovePlane(px, pz) : 0f;
+
+        if (playgroundPlane == null)
+            return new Vector3(px, height, pz);
+
+        Vector3 quadLocalPos = new Vector3((px / region.FullWidth) - 0.5f, (pz / region.FullHeight) - 0.5f, 0f);
+        Vector3 worldPos = playgroundPlane.Transform.TransformPoint(quadLocalPos);
+        worldPos += playgroundPlane.Transform.up * height;
+        return worldPos;
     }
 
     /// <summary>

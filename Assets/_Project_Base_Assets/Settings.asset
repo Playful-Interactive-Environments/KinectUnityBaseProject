@@ -40,34 +40,32 @@ MonoBehaviour:
     ContrastStretchClipPercent: 0
   TargetFrameRate: 30
   FrameSkipInterval: 0
-  Orientation: 0
+  Orientation: 1
   wallOriginOffset: {x: 0, y: 0, z: 0}
   CameraFollowsRect: 1
   UsePerspectiveCamera: 0
   PerspectiveFOV: 64.5
-  CameraDistance: 203.7
+  CameraDistance: 180.66794
   FlipX: 0
   FlipY: 1
   UseBounds: 1
   MinMaxRect:
     serializedVersion: 2
-    x: 254.53287
-    y: 149.61063
-    width: 164.96956
-    height: 117.00723
+    x: 178.021
+    y: 111.41075
+    width: 163.84242
+    height: 120.52787
   Projection:
     serializedVersion: 2
-    x: 254.53285
-    y: 149.61063
-    width: 164.96956
-    height: 117.00723
+    x: 178.02098
+    y: 111.41074
+    width: 163.84242
+    height: 120.52787
   Playground:
     serializedVersion: 2
-    x: 254.53285
-    y: 149.61063
-    width: 164.96956
-    height: 117.00723
+    x: 178.02098
+    y: 111.41074
+    width: 163.84242
+    height: 120.52787
   playgroundManuallySet: 1
   AreaRatio: {x: 1, y: 1}
-  CameraOffsetX: 0
-  CameraOffsetZ: 0

@@ -36,9 +36,6 @@ public class BlobObjectDetector : MonoBehaviour
     [SerializeField, Range(0, 65535)] private float depthMin = 450f;
     [SerializeField, Range(0, 65535)] private float depthMax = 510f;
 
-    [Header("Performance & Mesh Settings")]
-    [SerializeField, Tooltip("Downscale factor for faster contour processing (1 = full res, 2 = half res).")]
-    [Range(1, 4)] private int processingDownscale = 1;
     [SerializeField] private float heightOffset = 1f;
 
     [Header("Blob Cleanup Settings")]
@@ -63,7 +60,10 @@ public class BlobObjectDetector : MonoBehaviour
 
     [SerializeField] private float extrusionDepth = 0.05f;
 
-    [Header("Mesh Simplification")]
+    [SerializeField, Tooltip("Downscale factor for faster contour processing (1 = full res, 2 = half res).")]
+    [Range(1, 4)] private int processingDownscale = 1;
+
+    [Header("Mesh Simplification (for Non-Vertex Height Displacement)")]
     [SerializeField] private MeshSimplificationMode simplificationMode = MeshSimplificationMode.None;
     [SerializeField, Range(0.0f, 10f)] private float contourSimplificationEpsilon = 0f;
     [SerializeField, Range(0, 5)] private int edgeSmoothingIterations = 0;
@@ -80,6 +80,14 @@ public class BlobObjectDetector : MonoBehaviour
     [SerializeField, Range(0, 2000)] private float colorDepthMin = 450f;
     [SerializeField, Range(0, 2000)] private float colorDepthMax = 510f;
     [SerializeField] private bool invertColorMapping = false;
+
+    [Header("Vertex Height Displacement - Adaptive Displacement Mesh")]
+    [SerializeField, Tooltip("Use higher vertex density near the blob edge and a coarser grid in the interior, instead of a uniform per-pixel grid.")]
+    private bool enableAdaptiveMesh = false;
+    [SerializeField, Tooltip("Distance (in processed pixels) from the blob boundary that stays full resolution.")]
+    private float adaptiveEdgeBandWidth = 6f;
+    [SerializeField, Tooltip("Interior sampling stride in pixels — larger values mean fewer interior vertices.")]
+    [Range(1, 16)] private int adaptiveInteriorStride = 4;
 
     [Header("Dynamic (Wall) Height Settings")]
     [SerializeField] private bool enableDynamicWallHeight = true;
@@ -125,6 +133,24 @@ public class BlobObjectDetector : MonoBehaviour
     private int[] seamNeighborCounts;
     private int[] seamEdgeA, seamEdgeB;
     private int[] seamVertexArr;
+
+    private float[] scratchDts;
+    private bool[] scratchIsExtrapolated;
+    private float[] scratchNeighborAvg;
+    private int[] scratchCounts;
+    private float[] scratchClippedDts;
+    private float[] scratchOffsets;
+
+    private Mat adaptiveMaskMat = new Mat();
+    private Mat adaptiveDistMat = new Mat();
+    private Subdiv2D adaptiveSubdiv = new Subdiv2D();
+    private readonly List<Point> adaptiveSelectedPoints = new List<Point>();
+    private readonly HashSet<long> adaptiveSeenKeys = new HashSet<long>();
+    private readonly Dictionary<(int, int), int> adaptivePtMap = new Dictionary<(int, int), int>();
+    private readonly List<int> adaptiveTriList = new List<int>();
+
+    // new field, reused across frames (grow-only, same pattern as your other scratch buffers)
+    private Point2f[] adaptiveInsertBuffer = new Point2f[256];
 
     private Mat roiDisplayMat = new Mat();
     private readonly Dictionary<DebugStage, byte[]> debugRawBytesBuffers = new Dictionary<DebugStage, byte[]>();
@@ -178,6 +204,7 @@ public class BlobObjectDetector : MonoBehaviour
 
     private void HandleSettingsChanged()
     {
+        BuildColorRampLUT();
         ProcessFrame();
     }
 
@@ -265,45 +292,53 @@ public class BlobObjectDetector : MonoBehaviour
         }
     }
 
-    private void GetCropBounds(int fullWidth, int fullHeight, out int cropX, out int cropY, out int cropW, out int cropH)
-    {
-        var crop = PlaygroundMapping.GetCropBounds(settings, fullWidth, fullHeight);
-        cropX = crop.X; cropY = crop.Y; cropW = crop.Width; cropH = crop.Height;
-    }
-
     private void HandleTexturesInitialized(int width, int height) { }
+
+    private void EnsureScratchBuffers(int count)
+    {
+        if (scratchDts == null || scratchDts.Length < count)
+        {
+            scratchDts = new float[count];
+            scratchIsExtrapolated = new bool[count];
+            scratchNeighborAvg = new float[count];
+            scratchCounts = new int[count];
+            scratchClippedDts = new float[count];
+            scratchOffsets = new float[count];
+        }
+    }
 
     private void ProcessFrame()
     {
-        if (SourceManager.instance == null || SourceManager.instance.DepthTex == null) return;
+        if (SourceManager.instance == null) return;
+
+        var sm = SourceManager.instance;
+        if (sm == null) return;
+
+        Texture2D preparedDepth = sm.PreparedDepthTex;
+        if (preparedDepth == null) return; // not allocated yet
+
+        var region = sm.GetPreparedRegion(SourceMode.Depth);
+        int cropW = preparedDepth.width;
+        int cropH = preparedDepth.height;
+        if (!region.IsValid || region.DisplayCrop.Width != cropW || region.DisplayCrop.Height != cropH) return;
 
         EnsureSegmentsRootParent();
 
-        Texture2D displTex = SourceManager.instance.DepthTex;
-        int width = displTex.width;
-        int height = displTex.height;
-
-        NativeArray<ushort> rawDepth = displTex.GetPixelData<ushort>(0);
-
+        NativeArray<ushort> rawDepth = preparedDepth.GetPixelData<ushort>(0);
         if (!rawDepth.IsCreated || rawDepth.Length == 0) return;
 
-        int fullWidth = width;
-        int fullHeight = height;
-
-        GetCropBounds(fullWidth, fullHeight, out int cropX, out int cropY, out int cropW, out int cropH);
+        int fullWidth = region.FullWidth;
+        int fullHeight = region.FullHeight;
+        int cropX = region.DisplayCrop.X;
+        int cropY = region.DisplayCrop.Y;
         Hands.Clear();
 
         unsafe
         {
-            using (var fullMat = new Mat(fullHeight, fullWidth, MatType.CV_16UC1, (IntPtr)rawDepth.GetUnsafeReadOnlyPtr()))
-            using (var croppedMat = new Mat(fullMat, new OpenCvSharp.Rect(cropX, cropY, cropW, cropH)))
-            using (var grayMat = croppedMat.Clone())
+            using (var preparedMat = new Mat(cropH, cropW, MatType.CV_16UC1, (IntPtr)rawDepth.GetUnsafeReadOnlyPtr()))
+            using (var grayMat = preparedMat.Clone())
             using (var threshMat = new Mat())
             {
-                var flipMode = PlaygroundMapping.GetOpenCvFlipMode(settings);
-                if (flipMode.HasValue)
-                    Cv2.Flip(grayMat, grayMat, flipMode.Value);
-
                 UpdateRoiTexture(grayMat);
                 CaptureDebugStage(DebugStage.Grayscale, grayMat);
 
@@ -394,14 +429,17 @@ public class BlobObjectDetector : MonoBehaviour
 
                     foreach (var blobPixels in objectBlobs)
                     {
-                        BuildPixelGridMesh(blobPixels, out Point[] finePoints, out int[] fineTriangles);
-                        if (finePoints.Length < 3) continue;
+                        Point[] finePoints;
+                        int[] fineTriangles;
+
+                        if (enableDisplacement && enableAdaptiveMesh)
+                            BuildAdaptiveMesh(blobPixels, adaptiveEdgeBandWidth, adaptiveInteriorStride, out finePoints, out fineTriangles);
+                        else
+                            BuildPixelGridMesh(blobPixels, out finePoints, out fineTriangles);
+
                         List<(int from, int to)> boundaryEdges = ComputeBoundaryEdges(fineTriangles);
 
-                        Point[] gridPoints = finePoints;
-                        int[] gridTriangles = fineTriangles;
-
-                        if (gridTriangles.Length < 3) continue;
+                        if (finePoints.Length < 3) continue;
 
                         float t = 0f;
                         if (enableDynamicWallHeight)
@@ -415,17 +453,19 @@ public class BlobObjectDetector : MonoBehaviour
                         if (enableDynamicWallHeight && dynamicHeightMode == DynamicHeightMode.DynamicInstanceHeight)
                             verticalOffset = Mathf.Lerp(minInstanceHeight, maxInstanceHeight, t);
 
-                        Vector3[] localPoints = new Vector3[gridPoints.Length];
-                        float[] dts = new float[gridPoints.Length];
-                        float[] colorDts = new float[gridPoints.Length];
-                        bool[] isExtrapolated = new bool[gridPoints.Length];
-                        float minDt = float.MaxValue;
+                        EnsureScratchBuffers(finePoints.Length);
+                        float[] dts = scratchDts;
+                        bool[] isExtrapolated = scratchIsExtrapolated;
+                        Array.Clear(isExtrapolated, 0, finePoints.Length);
+
+                        Vector3[] localPoints = new Vector3[finePoints.Length];
+                        float[] colorDts = new float[finePoints.Length];
                         int offset = processingDownscale / 2;
 
-                        for (int i = 0; i < gridPoints.Length; i++)
+                        for (int i = 0; i < finePoints.Length; i++)
                         {
-                            int rawX = gridPoints[i].X * processingDownscale;
-                            int rawY = gridPoints[i].Y * processingDownscale;
+                            int rawX = finePoints[i].X * processingDownscale;
+                            int rawY = finePoints[i].Y * processingDownscale;
 
                             Vector3 pt = MapPointToPlaygroundSpace(rawX, rawY, cropX, cropY, cropW, cropH, fullWidth, fullHeight);
                             pt += Vector3.up * verticalOffset;
@@ -494,23 +534,25 @@ public class BlobObjectDetector : MonoBehaviour
                             }
                         }
 
-                        if (enableDisplacement && gridTriangles.Length >= 3)
+                        if (enableDisplacement && fineTriangles.Length >= 3)
                         {
-                            float[] neighborAvg = new float[gridPoints.Length];
-                            int[] counts = new int[gridPoints.Length];
+                            float[] neighborAvg = scratchNeighborAvg;
+                            int[] counts = scratchCounts;
+                            Array.Clear(neighborAvg, 0, finePoints.Length);
+                            Array.Clear(counts, 0, finePoints.Length);
 
-                            for (int tri = 0; tri < gridTriangles.Length; tri += 3)
+                            for (int tri = 0; tri < fineTriangles.Length; tri += 3)
                             {
-                                int i0 = gridTriangles[tri];
-                                int i1 = gridTriangles[tri + 1];
-                                int i2 = gridTriangles[tri + 2];
+                                int i0 = fineTriangles[tri];
+                                int i1 = fineTriangles[tri + 1];
+                                int i2 = fineTriangles[tri + 2];
 
                                 neighborAvg[i0] += dts[i1] + dts[i2]; counts[i0] += 2;
                                 neighborAvg[i1] += dts[i0] + dts[i2]; counts[i1] += 2;
                                 neighborAvg[i2] += dts[i0] + dts[i1]; counts[i2] += 2;
                             }
 
-                            for (int i = 0; i < gridPoints.Length; i++)
+                            for (int i = 0; i < finePoints.Length; i++)
                             {
                                 if (counts[i] > 0)
                                 {
@@ -523,11 +565,11 @@ public class BlobObjectDetector : MonoBehaviour
                             }
                         }
 
-                        if (enableDisplacement && displacementSmoothingIterations > 0 && gridTriangles.Length >= 3)
+                        if (enableDisplacement && displacementSmoothingIterations > 0 && fineTriangles.Length >= 3)
                         {
-                            boundaryEdges = ComputeBoundaryEdges(gridTriangles);
+                            boundaryEdges = ComputeBoundaryEdges(fineTriangles);
 
-                            List<(int a, int b)> allEdges = ComputeAllEdges(gridTriangles);
+                            List<(int a, int b)> allEdges = ComputeAllEdges(fineTriangles);
                             var seamEdgeList = new List<(int a, int b)>();
                             var seamVertexSet = new HashSet<int>();
 
@@ -542,7 +584,7 @@ public class BlobObjectDetector : MonoBehaviour
                             int seamEdgeCount = seamEdgeList.Count;
                             int seamVertCount = seamVertexSet.Count;
 
-                            EnsureSeamSmoothingBuffers(gridPoints.Length, seamEdgeCount, seamVertCount);
+                            EnsureSeamSmoothingBuffers(finePoints.Length, seamEdgeCount, seamVertCount);
 
                             for (int i = 0; i < seamEdgeCount; i++)
                             {
@@ -599,17 +641,17 @@ public class BlobObjectDetector : MonoBehaviour
                             }
                         }
 
-                        if (enableDisplacement && gridTriangles.Length >= 3)
+                        if (enableDisplacement && fineTriangles.Length >= 3)
                         {
-                            int vCount = gridPoints.Length;
-                            int edgeSlots = gridTriangles.Length * 2; // 2 neighbor entries added per vertex per triangle
+                            int vCount = finePoints.Length;
+                            int edgeSlots = fineTriangles.Length * 2; // 2 neighbor entries added per vertex per triangle
 
                             EnsureNeighborBuffers(vCount, edgeSlots);
                             Array.Clear(neighborDegree, 0, vCount);
 
-                            for (int tri = 0; tri < gridTriangles.Length; tri += 3)
+                            for (int tri = 0; tri < fineTriangles.Length; tri += 3)
                             {
-                                int i0 = gridTriangles[tri], i1 = gridTriangles[tri + 1], i2 = gridTriangles[tri + 2];
+                                int i0 = fineTriangles[tri], i1 = fineTriangles[tri + 1], i2 = fineTriangles[tri + 2];
                                 neighborDegree[i0] += 2; neighborDegree[i1] += 2; neighborDegree[i2] += 2;
                             }
 
@@ -619,9 +661,9 @@ public class BlobObjectDetector : MonoBehaviour
 
                             Array.Copy(neighborStart, neighborCursor, vCount);
 
-                            for (int tri = 0; tri < gridTriangles.Length; tri += 3)
+                            for (int tri = 0; tri < fineTriangles.Length; tri += 3)
                             {
-                                int i0 = gridTriangles[tri], i1 = gridTriangles[tri + 1], i2 = gridTriangles[tri + 2];
+                                int i0 = fineTriangles[tri], i1 = fineTriangles[tri + 1], i2 = fineTriangles[tri + 2];
                                 neighborFlat[neighborCursor[i0]++] = i1; neighborFlat[neighborCursor[i0]++] = i2;
                                 neighborFlat[neighborCursor[i1]++] = i0; neighborFlat[neighborCursor[i1]++] = i2;
                                 neighborFlat[neighborCursor[i2]++] = i0; neighborFlat[neighborCursor[i2]++] = i1;
@@ -650,24 +692,19 @@ public class BlobObjectDetector : MonoBehaviour
 
                         if (enableDisplacement)
                         {
-                            for (int i = 0; i < gridPoints.Length; i++)
-                            {
-                                if (dts[i] < minDt) minDt = dts[i];
-                            }
-                        }
-                        if (minDt == float.MaxValue) minDt = 0f;
+                            float minOffset = float.MaxValue;
+                            float[] offsets = new float[finePoints.Length];
 
-                        if (enableDisplacement)
-                        {
-                            for (int i = 0; i < gridPoints.Length; i++)
+                            for (int i = 0; i < finePoints.Length; i++)
                             {
-                                float relativeDt = dts[i] - minDt;
-                                localPoints[i] += Vector3.up * (relativeDt * displacementMax);
+                                offsets[i] = dts[i] * displacementMax;
+                                if (offsets[i] < minOffset) minOffset = offsets[i];
+                                localPoints[i] += Vector3.up * (offsets[i] - minOffset);
                             }
                         }
 
                         dynamicMeshes.Add(localPoints);
-                        dynamicTriangles.Add(gridTriangles);
+                        dynamicTriangles.Add(fineTriangles);
                         dynamicBoundaryEdges.Add(boundaryEdges);
                         dynamicVertexDepths.Add(colorDts);
 
@@ -688,12 +725,15 @@ public class BlobObjectDetector : MonoBehaviour
 
     private void BuildColorRampLUT()
     {
-        if (colorRampLUT != null) Destroy(colorRampLUT);
-
-        colorRampLUT = new Texture2D(colorRampLUTSize, 1, TextureFormat.RGBA32, false)
+        if (colorRampLUT == null || colorRampLUT.width != colorRampLUTSize)
         {
-            wrapMode = TextureWrapMode.Clamp
-        };
+            if (colorRampLUT != null) Destroy(colorRampLUT);
+            colorRampLUT = new Texture2D(colorRampLUTSize, 1, TextureFormat.RGBA32, false)
+            {
+                wrapMode = TextureWrapMode.Clamp
+            };
+        }
+
         var pixels = new Color[colorRampLUTSize];
         for (int x = 0; x < colorRampLUTSize; x++)
         {
@@ -706,6 +746,113 @@ public class BlobObjectDetector : MonoBehaviour
         {
             handMeshMaterial.SetTexture("_HeightLUT", colorRampLUT);
         }
+    }
+
+    private void BuildAdaptiveMesh(Point[] blobPixels, float edgeBandWidth, int interiorStride, out Point[] points, out int[] triangles)
+    {
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+        for (int i = 0; i < blobPixels.Length; i++)
+        {
+            var p = blobPixels[i];
+            if (p.X < minX) minX = p.X;
+            if (p.X > maxX) maxX = p.X;
+            if (p.Y < minY) minY = p.Y;
+            if (p.Y > maxY) maxY = p.Y;
+        }
+
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+
+        adaptiveMaskMat.Create(height, width, MatType.CV_8UC1);
+        adaptiveMaskMat.SetTo(Scalar.All(0));
+
+        unsafe
+        {
+            byte* maskPtr = (byte*)adaptiveMaskMat.DataPointer;
+            int maskStride = (int)adaptiveMaskMat.Step();
+
+            for (int i = 0; i < blobPixels.Length; i++)
+            {
+                var p = blobPixels[i];
+                maskPtr[(p.Y - minY) * maskStride + (p.X - minX)] = 255;
+            }
+        }
+
+        Cv2.DistanceTransform(adaptiveMaskMat, adaptiveDistMat, DistanceTypes.L2, DistanceMaskSize.Precise);
+
+        adaptiveSelectedPoints.Clear();
+        adaptiveSeenKeys.Clear();
+
+        unsafe
+        {
+            float* distPtr = (float*)adaptiveDistMat.DataPointer;
+            int distStride = (int)(adaptiveDistMat.Step() / sizeof(float));
+
+            for (int i = 0; i < blobPixels.Length; i++)
+            {
+                var p = blobPixels[i];
+                int lx = p.X - minX, ly = p.Y - minY;
+                float d = distPtr[ly * distStride + lx];
+
+                bool keep = d <= edgeBandWidth || (lx % interiorStride == 0 && ly % interiorStride == 0);
+                if (!keep) continue;
+
+                long key = ((long)lx << 32) | (uint)ly;
+                if (adaptiveSeenKeys.Add(key)) adaptiveSelectedPoints.Add(p);
+            }
+        }
+
+        points = adaptiveSelectedPoints.ToArray(); // still a fresh array — this one is the actual per-blob mesh output, needed downstream
+
+        var rect = new OpenCvSharp.Rect(0, 0, width, height);
+        adaptiveSubdiv.InitDelaunay(rect);
+
+        adaptivePtMap.Clear();
+        EnsureInsertBuffer(points.Length);
+
+        for (int i = 0; i < points.Length; i++)
+        {
+            int lx = points[i].X - minX, ly = points[i].Y - minY;
+            adaptiveInsertBuffer[i] = new Point2f(lx, ly);
+            adaptivePtMap[(lx, ly)] = i;
+        }
+
+        adaptiveSubdiv.Insert(new ArraySegment<Point2f>(adaptiveInsertBuffer, 0, points.Length));
+
+        Vec6f[] triangleList = adaptiveSubdiv.GetTriangleList(); // allocated by the OpenCvSharp wrapper itself — not something we control
+
+        adaptiveTriList.Clear();
+
+        foreach (var t in triangleList)
+        {
+            var pt0 = new Point(Mathf.RoundToInt(t.Item0), Mathf.RoundToInt(t.Item1));
+            var pt1 = new Point(Mathf.RoundToInt(t.Item2), Mathf.RoundToInt(t.Item3));
+            var pt2 = new Point(Mathf.RoundToInt(t.Item4), Mathf.RoundToInt(t.Item5));
+
+            if (pt0.X < 0 || pt0.Y < 0 || pt0.X >= width || pt0.Y >= height) continue;
+            if (pt1.X < 0 || pt1.Y < 0 || pt1.X >= width || pt1.Y >= height) continue;
+            if (pt2.X < 0 || pt2.Y < 0 || pt2.X >= width || pt2.Y >= height) continue;
+
+            if (!adaptivePtMap.TryGetValue((pt0.X, pt0.Y), out int i0)) continue;
+            if (!adaptivePtMap.TryGetValue((pt1.X, pt1.Y), out int i1)) continue;
+            if (!adaptivePtMap.TryGetValue((pt2.X, pt2.Y), out int i2)) continue;
+
+            int cx = (pt0.X + pt1.X + pt2.X) / 3;
+            int cy = (pt0.Y + pt1.Y + pt2.Y) / 3;
+
+            unsafe
+            {
+                byte* maskPtr = (byte*)adaptiveMaskMat.DataPointer;
+                int maskStride = (int)adaptiveMaskMat.Step();
+
+                // inside the existing foreach (var t in triangleList) loop, replace the check with:
+                if (maskPtr[cy * maskStride + cx] == 0) continue;
+            }
+
+            adaptiveTriList.Add(i0); adaptiveTriList.Add(i1); adaptiveTriList.Add(i2);
+        }
+
+        triangles = adaptiveTriList.ToArray(); // per-blob mesh output, needed downstream
     }
 
     private void BuildPixelGridMesh(Point[] blobPixels, out Point[] points, out int[] triangles)
@@ -765,6 +912,12 @@ public class BlobObjectDetector : MonoBehaviour
 
         points = blobPixels;
         triangles = triList.ToArray();
+    }
+
+    private void EnsureInsertBuffer(int count)
+    {
+        if (adaptiveInsertBuffer.Length < count)
+            adaptiveInsertBuffer = new Point2f[Mathf.NextPowerOfTwo(count)];
     }
 
     private void EnsureGridBuffers(int requiredCellCount)
@@ -933,11 +1086,8 @@ public class BlobObjectDetector : MonoBehaviour
         // when Flip is on. localX/localY are already display-space (Cv2.Flip reorders grayMat's
         // pixels to match). Mirror cropX/cropY back to display space before combining, rather than
         // converting localX/localY to sensor space.
-        float dispCropX = settings.FlipX ? (fullWidth - cropX - cropW) : cropX;
-        float dispCropY = settings.FlipY ? (fullHeight - cropY - cropH) : cropY;
-
-        float sensorX = dispCropX + localX + 0.5f;
-        float sensorY = dispCropY + localY + 0.5f;
+        float sensorX = cropX + localX + 0.5f;
+        float sensorY = cropY + localY + 0.5f;
 
         // 2. Normalize to Quad Local Space (-0.5 to +0.5)
         // OpenCV Y is Top-to-Bottom; Quad local Y is Bottom-to-Top (+0.5 is top)
@@ -1009,6 +1159,9 @@ public class BlobObjectDetector : MonoBehaviour
 
         roiDisplayMat?.Dispose();
         debugDisplayMat?.Dispose();
+        adaptiveMaskMat?.Dispose();
+        adaptiveDistMat?.Dispose();
+        adaptiveSubdiv?.Dispose();
 
         if (debugOverlayGo != null) { Destroy(debugOverlayGo); debugOverlayGo = null; }
 

@@ -72,11 +72,6 @@ public class ArucoDetector : MonoBehaviour
     private readonly byte[] contrastLut = new byte[256];
     private byte[] contrastStretched;
 
-    private bool readbackInFlight;
-    private struct PendingFrameCrop
-    {
-        public int fullWidth, fullHeight, cropX, cropY, cropW, cropH;
-    }
 
     [Header("Webcam Debug Source")]
     [SerializeField] private bool useWebcamInspector = false;
@@ -119,9 +114,6 @@ public class ArucoDetector : MonoBehaviour
     private static readonly ProfilerMarker MarkerDetect = new ProfilerMarker("ArucoDetector.DetectMarkers");
     private static readonly ProfilerMarker MarkerReadback = new ProfilerMarker("ArucoDetector.ReadbackWait");
 
-    private static bool readbackNeedsYFlip;
-    private static bool readbackNeedsYFlipInitialized;
-
     public bool UseWebcam
     {
         get => useWebcam;
@@ -155,7 +147,6 @@ public class ArucoDetector : MonoBehaviour
 
     private void OnDisable() 
     {
-        readbackInFlight = false;
         SourceManager.OnTexturesInitialized -= HandleTexturesInitialized;
         SourceManager.OnFrameUpdated -= ProcessFrame;
         CleanupMatResources();
@@ -179,12 +170,6 @@ public class ArucoDetector : MonoBehaviour
 
     private void Awake()
     {
-        if (!readbackNeedsYFlipInitialized)
-        {
-            readbackNeedsYFlip = !SystemInfo.graphicsUVStartsAtTop;
-            readbackNeedsYFlipInitialized = true;
-            Debug.Log($"ArucoDetector: graphicsUVStartsAtTop={SystemInfo.graphicsUVStartsAtTop}, graphicsDeviceType={SystemInfo.graphicsDeviceType}");
-        }
     }
 
     private void Start()
@@ -269,75 +254,34 @@ public class ArucoDetector : MonoBehaviour
     private void ProcessFrame()
     {
         if (useWebcam) return;
-        if (readbackInFlight) return; // drop this frame if previous readback hasn't landed yet — avoids queueing stalls
 
-        Texture2D sourceTex = SourceManager.instance != null ? SourceManager.instance.GetTexture(sourceMode) : null;
-        if (sourceTex == null) return;
+        var sm = SourceManager.instance;
+        if (sm == null) return;
 
-        int fullWidth = sourceTex.width;
-        int fullHeight = sourceTex.height;
+        Texture2D prepared = sm.GetPreparedTexture(sourceMode);
+        if (prepared == null) return; // needs SourceManager.UseBlur = true and a Depth/Infrared sourceMode
 
-        GetCropBounds(fullWidth, fullHeight, out int cropX, out int cropY, out int cropW, out int cropH);
+        var region = sm.GetPreparedRegion(sourceMode);
+        int cropW = prepared.width;
+        int cropH = prepared.height;
+
+        // Texture and region must belong together (crop resized / first frame not landed yet -> skip)
+        if (!region.IsValid || region.DisplayCrop.Width != cropW || region.DisplayCrop.Height != cropH) return;
+
         ReallocateMatIfNeeded(cropW, cropH);
-
-        // AsyncGPUReadback addresses raw GPU memory, which may have its Y origin at the
-        // bottom (OpenGL/Vulkan-style) rather than the top Unity's texture-space assumes.
-        // GetCropBounds gives us a top-down cropY; convert it to the GPU's native origin.
-        int readbackY = readbackNeedsYFlip ? (fullHeight - cropY - cropH) : cropY;
-
-        var crop = new PendingFrameCrop
-        {
-            fullWidth = fullWidth,
-            fullHeight = fullHeight,
-            cropX = cropX,
-            cropY = cropY,
-            cropW = cropW,
-            cropH = cropH
-        };
-
-        readbackInFlight = true;
-        MarkerReadback.Begin();
-
-        AsyncGPUReadback.Request(
-            sourceTex, 0,
-            cropX, cropW, readbackY, cropH, 0, 1,
-            request => OnFrameReadback(request, crop)
-        );
-    }
-
-    private void OnFrameReadback(AsyncGPUReadbackRequest request, PendingFrameCrop crop)
-    {
-        readbackInFlight = false;
-        MarkerReadback.End(); // pairs with Begin() in ProcessFrame below
-
-        if (this == null || !isActiveAndEnabled) return;
-        if (useWebcam) return;
-
-        if (request.hasError)
-        {
-            Debug.LogWarning("ArucoDetector: AsyncGPUReadback failed.");
-            OnMarkersUpdated?.Invoke();
-            return;
-        }
-
-        Texture2D sourceTex = SourceManager.instance != null ? SourceManager.instance.GetTexture(sourceMode) : null;
-        if (sourceTex == null) return;
-
-        if (ImageMat == null || ImageMat.Cols != crop.cropW || ImageMat.Rows != crop.cropH)
-            ReallocateMatIfNeeded(crop.cropW, crop.cropH);
-
         Markers.Clear();
 
-        NativeArray<byte> rawBytes = request.GetData<byte>();
-
+        NativeArray<byte> rawBytes = prepared.GetRawTextureData<byte>();
         using (MarkerExtract.Auto())
-            ExtractGrayscaleDataFast(rawBytes, sourceTex.format, crop.cropW, crop.cropH);
+            ExtractGrayscaleDataFast(rawBytes, prepared.format, cropW, cropH);
 
-        byte[] processed = PreprocessForDetection(imageData, crop.cropW, crop.cropH);
+        byte[] processed = PreprocessForDetection(imageData, cropW, cropH);
         ImageMat.DataByte = processed;
-        BuildDetectionMat(crop.cropW, crop.cropH, processed);
-        DetectAndBuildMarkers(crop.fullWidth, crop.fullHeight, crop.cropX, crop.cropY, crop.cropW, crop.cropH);
+        BuildDetectionMat(cropW, cropH, processed);
+
+        DetectAndBuildMarkers(region.FullWidth, region.FullHeight, region.DisplayCrop.X, region.DisplayCrop.Y, cropW, cropH);
     }
+
 
     private unsafe void ExtractGrayscaleDataFast(NativeArray<byte> rawBytes, TextureFormat format, int cropW, int cropH)
     {
@@ -691,75 +635,29 @@ public class ArucoDetector : MonoBehaviour
 
                 Vector3[] points = new Vector3[4];
                 Vector3 center = Vector3.zero;
-
                 for (uint c = 0; c < 4; c++)
                 {
-                    uint mappedIndex = c;
-
-                    // 1. Fix Corner Ordering: Remap the OpenCV corner index back to the physical marker corner
-                    if (!useWebcam)
-                    {
-                        if (flipX)
-                        {
-                            // Swap Left and Right (0=TL <-> 1=TR, 3=BL <-> 2=BR)
-                            if (mappedIndex == 0) mappedIndex = 1;
-                            else if (mappedIndex == 1) mappedIndex = 0;
-                            else if (mappedIndex == 2) mappedIndex = 3;
-                            else if (mappedIndex == 3) mappedIndex = 2;
-                        }
-
-                        if (flipY)
-                        {
-                            // Swap Top and Bottom (0=TL <-> 3=BL, 1=TR <-> 2=BR)
-                            if (mappedIndex == 0) mappedIndex = 3;
-                            else if (mappedIndex == 3) mappedIndex = 0;
-                            else if (mappedIndex == 1) mappedIndex = 2;
-                            else if (mappedIndex == 2) mappedIndex = 1;
-                        }
-                    }
-
-                    Point2f pt = cornerPair.At(mappedIndex);
-
+                    Point2f pt = cornerPair.At(c);
                     float pxInCrop = pt.X * inv;
                     float pyInCrop = pt.Y * inv;
 
-                    // 2. Fix Spatial Projection: Un-flip the continuous coordinates back to the original texture space
-                    if (!useWebcam)
-                    {
-                        if (flipX)
-                        {
-                            // Find absolute X, flip globally, convert back to relative
-                            float absoluteX = cropX + pxInCrop;
-                            pxInCrop = (fullWidth - absoluteX) - cropX;
-                        }
-                        if (flipY)
-                        {
-                            // 1. Convert OpenCV's bottom-up crop Y back to top-down crop space
-                            float topDownPy = cropH - pyInCrop;
-
-                            // 2. Calculate absolute top-down Y in the full image
-                            float absoluteY = cropY + topDownPy;
-
-                            // 3. Mirror globally across fullHeight
-                            float flippedAbsoluteY = fullHeight - absoluteY;
-
-                            // 4. Convert back to crop-relative space and re-apply OpenCV's bottom-up convention
-                            float flippedTopDownPy = flippedAbsoluteY - cropY;
-                            pyInCrop = cropH - flippedTopDownPy;
-                        }
-                    }
-
-                    var crop = new PlaygroundMapping.CropRect { X = cropX, Y = cropY, Width = cropW, Height = cropH };
-
                     if (useWebcam)
                     {
-                        // Webcam path bypasses CPU mirroring, apply settings normally
-                        points[c] = PlaygroundMapping.PixelToWorldF(pxInCrop, pyInCrop, crop, fullWidth, fullHeight, settings, playgroundPlane);
+                        // Webcam path unchanged: sensor-space crop + settings-based flip in the mapping.
+                        var webcamCrop = new PlaygroundMapping.CropRect { X = cropX, Y = cropY, Width = cropW, Height = cropH };
+                        points[c] = PlaygroundMapping.PixelToWorldF(pxInCrop, pyInCrop, webcamCrop, fullWidth, fullHeight, settings, playgroundPlane);
                     }
                     else
                     {
-                        // Corners are now fully restored to the original un-flipped pixel space and physical ordering
-                        points[c] = PlaygroundMapping.PixelToWorldF(pxInCrop, pyInCrop, crop, fullWidth, fullHeight, null, playgroundPlane);
+                        // Mat rows are top-down (ExtractGrayscaleDataFast reverses them); world rows are bottom-up.
+                        var region = new SourceManager.PreparedRegion
+                        {
+                            DisplayCrop = new PlaygroundMapping.CropRect { X = cropX, Y = cropY, Width = cropW, Height = cropH },
+                            FullWidth = fullWidth,
+                            FullHeight = fullHeight
+                        };
+                        float rowFromBottom = (cropH - 1) - pyInCrop;
+                        points[c] = PlaygroundMapping.PreparedPixelToWorld(pxInCrop, rowFromBottom, region, playgroundPlane);
                     }
 
                     center += points[c];

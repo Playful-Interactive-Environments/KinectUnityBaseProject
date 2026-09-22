@@ -4,28 +4,49 @@
 Texture2D<float> SourceTexture;
 RWTexture2D<float> OutputTexture;
 
-static const uint mat[5][5] = {
-    {1, 4,  7,  4,  1},
-    {4, 20, 33, 20, 4},
-    {7, 33, 55, 33, 7},
-    {4, 20, 33, 20, 4},
-    {1, 4,  7,  4,  1}
+static const uint mat[5][5] =
+{
+    { 1, 4, 7, 4, 1 },
+    { 4, 20, 33, 20, 4 },
+    { 7, 33, 55, 33, 7 },
+    { 4, 20, 33, 20, 4 },
+    { 1, 4, 7, 4, 1 }
 };
 
 cbuffer onValidate
 {
     int Radius;
+    int CropX;
+    int CropY;
+    int CropW;
+    int CropH;
+    int FlipX; // 0 or 1. HLSL cbuffers do not pack bool reliably, so use int.
+    int FlipY;
 };
+
+// Maps an OutputTexture coordinate (0..CropW-1, 0..CropH-1) to the SourceTexture
+// coordinate that should be its blur center, applying crop offset and flip once here
+// so neither ArucoDetector nor BlobObjectDetector need any flip/crop logic downstream.
+int2 GetSourceCenter(uint2 id)
+{
+    int sx = FlipX ? (CropX + CropW - 1 - (int) id.x) : (CropX + (int) id.x);
+    int sy = FlipY ? (CropY + CropH - 1 - (int) id.y) : (CropY + (int) id.y);
+    return int2(sx, sy);
+}
 
 [numthreads(8, 8, 1)]
 void BoxLinear(uint2 id : SV_DispatchThreadID)
 {
+    int2 center = GetSourceCenter(id);
+
     half col = 0;
     uint sum = 0;
 
-    for (int x = -Radius; x <= Radius; x++) {
-        for (int y = -Radius; y <= Radius; y++, sum++) {
-            col += SourceTexture[id.xy + int2(x, y)];
+    for (int x = -Radius; x <= Radius; x++)
+    {
+        for (int y = -Radius; y <= Radius; y++, sum++)
+        {
+            col += SourceTexture[center + int2(x, y)];
         };
     };
 
@@ -35,12 +56,16 @@ void BoxLinear(uint2 id : SV_DispatchThreadID)
 [numthreads(8, 8, 1)]
 void Gaussian(uint2 id : SV_DispatchThreadID)
 {
+    int2 center = GetSourceCenter(id);
+
     half col = 0;
     uint sum = 0;
 
-    for (int x = -Radius; x <= Radius; x++) {
-        for (int y = -Radius; y <= Radius; y++) {
-            col += mat[x + 2][y + 2] * SourceTexture[id.xy + int2(x, y)];
+    for (int x = -Radius; x <= Radius; x++)
+    {
+        for (int y = -Radius; y <= Radius; y++)
+        {
+            col += mat[x + 2][y + 2] * SourceTexture[center + int2(x, y)];
             sum += mat[x + 2][y + 2];
         };
     };

@@ -1,19 +1,15 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using static ArucoUnity.Plugin.Aruco;
+using TMPro;
 
 public class FPSDisplay : MonoBehaviour
 {
-    [Header("Display Settings")]
+    [Header("UI Reference")]
+    [SerializeField] private TextMeshProUGUI fpsText;
+
+    [Header("Controls")]
     [SerializeField] private Key toggleKey = Key.Tab;
-    [SerializeField] private int fontSize = 24;
-    [SerializeField] private Color textColor = Color.white;
-    [SerializeField] private Vector2 margin = new Vector2(20f, 20f);
-
-    [Header("Quit")]
     [SerializeField] private Key quitKey = Key.Escape;
-
-    [Header("VSync")]
     [SerializeField] private Key vsyncToggleKey = Key.V;
 
     [Header("Smoothing")]
@@ -23,21 +19,42 @@ public class FPSDisplay : MonoBehaviour
     private int accumFrames;
     private float timeLeft;
     private float displayFps;
+    private bool visible = false;
 
-    private GUIStyle style;
+    private void Start()
+    {
+        if (fpsText != null)
+        {
+            fpsText.gameObject.SetActive(visible);
+        }
+    }
 
     private void Update()
     {
-        if (Keyboard.current[quitKey].wasPressedThisFrame)
+        if (Keyboard.current != null)
         {
-            QuitGame();
+            if (Keyboard.current[toggleKey].wasPressedThisFrame)
+            {
+                visible = !visible;
+                if (fpsText != null)
+                {
+                    fpsText.gameObject.SetActive(visible);
+                }
+            }
+
+            if (Keyboard.current[quitKey].wasPressedThisFrame)
+            {
+                QuitGame();
+            }
+
+            if (Keyboard.current[vsyncToggleKey].wasPressedThisFrame)
+            {
+                QualitySettings.vSyncCount = QualitySettings.vSyncCount == 0 ? 1 : 0;
+                UpdateUIText(); // Refresh immediately on keypress
+            }
         }
 
-        if (Keyboard.current[vsyncToggleKey].wasPressedThisFrame)
-        {
-            QualitySettings.vSyncCount = QualitySettings.vSyncCount == 0 ? 1 : 0;
-        }
-
+        // FPS Calculation
         timeLeft -= Time.unscaledDeltaTime;
         accumFps += 1f / Time.unscaledDeltaTime;
         accumFrames++;
@@ -48,7 +65,21 @@ public class FPSDisplay : MonoBehaviour
             timeLeft = updateInterval;
             accumFps = 0f;
             accumFrames = 0;
+
+            if (visible)
+            {
+                UpdateUIText();
+            }
         }
+    }
+
+    private void UpdateUIText()
+    {
+        if (fpsText == null) return;
+
+        string vsyncLabel = QualitySettings.vSyncCount == 0 ? "VSync Off" : "VSync On";
+        string modeLabel = Settings.instance.Orientation.ToString();
+        fpsText.text = $"{displayFps:F1} FPS\n{vsyncLabel}\nMode: {modeLabel}";
     }
 
     private void QuitGame()
@@ -58,22 +89,5 @@ public class FPSDisplay : MonoBehaviour
 #else
         Application.Quit();
 #endif
-    }
-
-    private void OnGUI()
-    {
-        if (Keyboard.current == null || !Keyboard.current[toggleKey].wasPressedThisFrame) return;
-
-        style = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = fontSize,
-            alignment = TextAnchor.UpperLeft,
-            normal = { textColor = textColor }
-        };
-
-        float width = 150f;
-        Rect rect = new Rect(0 - width - margin.x, margin.y, width, (fontSize + 10f) * 2f);
-        string vsyncLabel = QualitySettings.vSyncCount == 0 ? "VSync Off" : "VSync On";
-        GUI.Label(rect, $"{displayFps:F1} FPS\n{vsyncLabel}", style);
     }
 }

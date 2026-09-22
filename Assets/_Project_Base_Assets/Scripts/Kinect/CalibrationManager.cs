@@ -51,7 +51,7 @@ public class CalibrationManager : MonoBehaviour
     private bool cachedCamOrthographic;
     private float cachedCamOrthoSize;
     private float cachedCamFov;
-
+    private Settings.PlaneOrientation? lastFitOrientation;
 
     [System.Serializable]
     private class CalibrationSnapshot
@@ -129,10 +129,16 @@ public class CalibrationManager : MonoBehaviour
         isEditModeActive = true;
         activeDragHandle = DragHandle.None;
 
+        // Disable CameraManager while editing so it doesn't fight FitCameraToPlayground()
+        if (Camera.main != null && Camera.main.TryGetComponent<CameraManager>(out var camMgr))
+        {
+            camMgr.enabled = false;
+        }
+
         CacheCameraPose();
         FitCameraToPlayground();
 
-        Extensions.DebugLog("Playground edit mode <color=magenta>ENTERED</color>. Drag the rect to move it, drag an edge to resize. Press F1 to exit.");
+        Extensions.DebugLog("Playground edit mode <color=magenta>ENTERED</color>...");
     }
 
     private void ExitEditMode()
@@ -143,11 +149,14 @@ public class CalibrationManager : MonoBehaviour
         SaveSettingsToAsset();
         RestoreCameraPose();
 
-        Settings.NotifySettingsChanged();
+        // Re-enable CameraManager on exit
+        if (Camera.main != null && Camera.main.TryGetComponent<CameraManager>(out var camMgr))
+        {
+            camMgr.enabled = true;
+        }
 
-        Extensions.DebugLog("Playground edit mode <color=magenta>EXITED</color>. Changes saved to Settings asset.");
+        Extensions.DebugLog("Playground edit mode <color=magenta>EXITED</color>...");
     }
-
     private void CacheCameraPose()
     {
         Camera cam = runtimeCamera != null ? runtimeCamera : Camera.main;
@@ -194,25 +203,30 @@ public class CalibrationManager : MonoBehaviour
         Rect rect = Settings.Playground;
         Vector3 center = LocalToWorld(new Vector2(rect.center.x, rect.center.y), origin, axisX, axisY);
 
-        // Pad by the handle knob radius so a handle sitting exactly on the rect edge doesn't clip
-        // at the frustum border, then add the configurable extra margin on top.
         float handlePad = GetHandleRadius(rect);
         float padding = 1f + cameraFitPaddingRatio;
         float halfW = (rect.width * 0.5f + handlePad) * padding;
         float halfH = (rect.height * 0.5f + handlePad) * padding;
 
         float aspect = cam.aspect;
+        float distance = 10f;
 
         if (cam.orthographic)
         {
-            // Any distance along the normal frames the same view for an orthographic camera —
-            // preserve the current one (falling back to a safe default) rather than picking an
-            // arbitrary value that could clip through near/far planes.
+            bool orientationChanged = !lastFitOrientation.HasValue || lastFitOrientation.Value != currentOrientation;
             float currentDistance = Vector3.Dot(cam.transform.position - origin, normal);
-            if (currentDistance < 0.01f) currentDistance = 10f;
+
+            if (!orientationChanged && currentDistance >= 0.01f)
+            {
+                distance = currentDistance;
+            }
+            else if (Settings.CameraDistance >= 0.01f)
+            {
+                distance = Settings.CameraDistance;
+            }
 
             cam.orthographicSize = Mathf.Max(halfH, halfW / aspect);
-            cam.transform.SetPositionAndRotation(center + normal * currentDistance, Quaternion.LookRotation(-normal, axisY));
+            cam.transform.SetPositionAndRotation(center + normal * distance, Quaternion.LookRotation(-normal, axisY));
         }
         else
         {
@@ -222,9 +236,13 @@ public class CalibrationManager : MonoBehaviour
             float hFovRad = 2f * Mathf.Atan(Mathf.Tan(vFovRad * 0.5f) * aspect);
             float distH = halfW / Mathf.Tan(hFovRad * 0.5f);
 
-            float distance = Mathf.Max(distV, distH);
+            distance = Mathf.Max(distV, distH);
             cam.transform.SetPositionAndRotation(center + normal * distance, Quaternion.LookRotation(-normal, axisY));
         }
+
+        // Save the fitted distance into Settings so CameraManager respects it after exiting edit mode
+        Settings.CameraDistance = distance;
+        lastFitOrientation = currentOrientation;
     }
 
     private void SaveSettingsToAsset()
@@ -240,6 +258,7 @@ public class CalibrationManager : MonoBehaviour
 #endif
 
         Settings.SaveToFile();
+        Settings.NotifySettingsChanged();
     }
 
 
@@ -247,7 +266,14 @@ public class CalibrationManager : MonoBehaviour
     {
         activeDragHandle = DragHandle.None;
         Settings.CycleOrientation();
+
+        // FitCameraToPlayground calculates distance for the new basis and updates Settings.CameraDistance[cite: 1]
         FitCameraToPlayground();
+
+#if UNITY_EDITOR
+        EditorUtility.SetDirty(Settings);
+#endif
+
         Extensions.DebugLog($"Playground orientation switched to <color=magenta>{currentOrientation}</color>.");
     }
 
@@ -350,6 +376,7 @@ public class CalibrationManager : MonoBehaviour
         {
             activeDragHandle = DragHandle.None;
             SaveSettingsToAsset();
+
         }
     }
 

@@ -34,7 +34,7 @@
     },
     "TargetFrameRate": 30,
     "FrameSkipInterval": 0,
-    "Orientation": 0,
+    "Orientation": 1,
     "wallOriginOffset": {
         "x": 0.0,
         "y": 0.0,
@@ -43,36 +43,34 @@
     "CameraFollowsRect": true,
     "UsePerspectiveCamera": false,
     "PerspectiveFOV": 64.5,
-    "CameraDistance": 203.6999969482422,
+    "CameraDistance": 180.66793823242188,
     "FlipX": false,
     "FlipY": true,
     "UseBounds": true,
     "MinMaxRect": {
         "serializedVersion": "2",
-        "x": 254.53286743164063,
-        "y": 149.61062622070313,
-        "width": 164.9695587158203,
-        "height": 117.00723266601563
+        "x": 178.02099609375,
+        "y": 111.41075134277344,
+        "width": 163.84242248535157,
+        "height": 120.52787017822266
     },
     "Projection": {
         "serializedVersion": "2",
-        "x": 254.53285217285157,
-        "y": 149.61062622070313,
-        "width": 164.9695587158203,
-        "height": 117.00723266601563
+        "x": 178.02098083496095,
+        "y": 111.4107437133789,
+        "width": 163.84242248535157,
+        "height": 120.52787017822266
     },
     "Playground": {
         "serializedVersion": "2",
-        "x": 254.53285217285157,
-        "y": 149.61062622070313,
-        "width": 164.9695587158203,
-        "height": 117.00723266601563
+        "x": 178.02098083496095,
+        "y": 111.4107437133789,
+        "width": 163.84242248535157,
+        "height": 120.52787017822266
     },
     "playgroundManuallySet": true,
     "AreaRatio": {
         "x": 1.0,
         "y": 1.0
-    },
-    "CameraOffsetX": 0.0,
-    "CameraOffsetZ": 0.0
+    }
 }

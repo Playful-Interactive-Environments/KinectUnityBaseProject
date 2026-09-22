@@ -25,15 +25,17 @@ public class SourceTextureViewer : MonoBehaviour
     [Header("References")]
     [SerializeField] private Settings settings;
 
-    /// <summary>
-    /// Dedicated Texture2D containing only the active cropped ROI image region.
-    /// </summary>
-    public Texture2D CroppedTexture { get; private set; }
+    // Only allocated for modes that have no GPU-prepared texture (Color).
+    private Texture lastActiveTexture;
+
 
     /// <summary>
     /// Alias property for cross-subsystem ROI texture compatibility.
     /// </summary>
-    public Texture2D RoiTexture => CroppedTexture;
+    public Texture CroppedTexture => GetActiveBaseTexture();
+    public Texture RoiTexture => CroppedTexture;
+
+    private RenderTexture roiCanvas;
 
     private Material instantiatedMat;
     private Texture2D heightLUT;
@@ -43,15 +45,14 @@ public class SourceTextureViewer : MonoBehaviour
     private float lastDepthMin = -1f;
     private float lastDepthMax = -1f;
     private Vector4 lastBounds = Vector4.zero;
-    private bool lastUseBounds;
-    private bool lastFlipX = false;
-    private bool lastFlipY = false;
+    private bool boundsDirty = false;
+    private Vector4 pendingBounds;
 
     public static event Action<Texture> OnActiveTextureChanged;
 
     // Public C# properties for runtime manipulation via UI/Scripts without polling
     public SourceMode CurrentMode
-    {
+    { 
         get => currentMode;
         set
         {
@@ -95,12 +96,19 @@ public class SourceTextureViewer : MonoBehaviour
 
     private void Start()
     {
-        lastFlipX = !settings.FlipX;
-        lastFlipY = !settings.FlipY;
         BuildHeightLUT();
         UpdateMaterialProperties(true);
     }
 
+    private void LateUpdate()
+    {
+        if (boundsDirty && instantiatedMat != null)
+        {
+            instantiatedMat.SetVector("_Bounds", pendingBounds);
+            lastBounds = pendingBounds;
+            boundsDirty = false;
+        }
+    }
     private void OnEnable()
     {
         SourceManager.OnFrameUpdated += HandleFrameUpdated;
@@ -140,51 +148,90 @@ public class SourceTextureViewer : MonoBehaviour
     {
         if (instantiatedMat == null || SourceManager.instance == null) return;
 
-        Texture baseTex = GetActiveBaseTexture();
-        if (baseTex != null)
-        {
-            UpdateCroppedTexture(baseTex);
-            instantiatedMat.SetTexture("_MainTex", baseTex);
-        }
+        Texture display = GetDisplayTexture();
+        if (display != null) instantiatedMat.SetTexture("_MainTex", display);
 
         CheckSettingsBounds();
+
+        if (display != lastActiveTexture) // prepared texture appears / gets reallocated on crop resize
+        {
+            lastActiveTexture = display;
+            OnActiveTextureChanged?.Invoke(display);
+        }
     }
 
     public Texture GetActiveBaseTexture()
     {
-        return SourceManager.instance != null ? SourceManager.instance.GetTexture(currentMode) : null;
+        if (SourceManager.instance == null) return null;
+
+        Texture prepared = SourceManager.instance.GetPreparedDisplayTexture(currentMode);
+        return prepared != null ? prepared : SourceManager.instance.GetTexture(currentMode);
     }
 
-    private void UpdateCroppedTexture(Texture sourceTex)
+    // UseBounds off: prepared texture already IS the full frame -> show it as is.
+    // UseBounds on: place the ROI at its display-space position on a black full-frame canvas.
+    private Texture GetDisplayTexture()
     {
-        if (sourceTex == null) return;
+        Texture prepared = GetActiveBaseTexture();
+        var sm = SourceManager.instance;
 
-        int fullWidth = sourceTex.width;
-        int fullHeight = sourceTex.height;
-
-        var crop = PlaygroundMapping.GetCropBounds(settings, fullWidth, fullHeight);
-        int cropX = crop.X, cropY = crop.Y, cropW = crop.Width, cropH = crop.Height;
-
-        RenderTexture rt = RenderTexture.GetTemporary(cropW, cropH, 0, RenderTextureFormat.ARGB32);
-
-        // Matches the shader's UV flip behavior — same transform ArucoDetector uses for its readback.
-        var blit = PlaygroundMapping.GetBlitTransform(settings, crop, fullWidth, fullHeight);
-        Graphics.Blit(sourceTex, rt, blit.Scale, blit.Offset);
-
-        RenderTexture previousActive = RenderTexture.active;
-        RenderTexture.active = rt;
-
-        if (CroppedTexture == null || CroppedTexture.width != cropW || CroppedTexture.height != cropH)
+        if (prepared == null || sm == null || sm.GetPreparedDisplayTexture(currentMode) == null)
         {
-            if (CroppedTexture != null) Destroy(CroppedTexture);
-            CroppedTexture = new Texture2D(cropW, cropH, TextureFormat.RGBA32, false);
+            ReleaseCanvas();
+            return prepared;
         }
 
-        CroppedTexture.ReadPixels(new Rect(0, 0, cropW, cropH), 0, 0);
-        CroppedTexture.Apply();
+        var region = sm.GetPreparedRegion(currentMode);
+        var dc = region.DisplayCrop;
+        Vector2Int full = new Vector2Int(region.FullWidth, region.FullHeight);
 
-        RenderTexture.active = previousActive;
-        RenderTexture.ReleaseTemporary(rt);
+        bool regionMatchesTexture = region.IsValid && dc.Width == prepared.width && dc.Height == prepared.height;
+        bool coversFullFrame = regionMatchesTexture && dc.Width == full.x && dc.Height == full.y;
+
+        if (coversFullFrame)
+        {
+            ReleaseCanvas();
+            return prepared;
+        }
+
+        if (!regionMatchesTexture)
+        {
+            // SourceManager hasn't reallocated `prepared` for the new crop size yet.
+            // Hold the previous frame's display instead of snapping to an unpositioned, stale-size texture.
+            if (roiCanvas != null) return roiCanvas;
+            if (lastActiveTexture != null) return lastActiveTexture;
+            return prepared; // first-ever frame, nothing to hold onto yet
+        }
+
+        RenderTextureFormat fmt = prepared is RenderTexture preparedRT ? preparedRT.format : RenderTextureFormat.R16;
+
+        if (roiCanvas == null || roiCanvas.width != full.x || roiCanvas.height != full.y || roiCanvas.format != fmt)
+        {
+            ReleaseCanvas();
+            roiCanvas = new RenderTexture(full.x, full.y, 0, fmt);
+            roiCanvas.filterMode = prepared.filterMode;
+            roiCanvas.Create();
+        }
+
+        RenderTexture prev = RenderTexture.active;
+        RenderTexture.active = roiCanvas;
+        GL.Clear(false, true, Color.black);
+        RenderTexture.active = prev;
+
+        int w = Mathf.Min(prepared.width, roiCanvas.width - dc.X);
+        int h = Mathf.Min(prepared.height, roiCanvas.height - dc.Y);
+        if (w > 0 && h > 0)
+            Graphics.CopyTexture(prepared, 0, 0, 0, 0, w, h, roiCanvas, 0, 0, dc.X, dc.Y);
+
+        return roiCanvas;
+    }
+
+    private void ReleaseCanvas()
+    {
+        if (roiCanvas == null) return;
+        roiCanvas.Release();
+        Destroy(roiCanvas);
+        roiCanvas = null;
     }
 
     private void UpdateMaterialProperties(bool modeChanged)
@@ -193,33 +240,13 @@ public class SourceTextureViewer : MonoBehaviour
 
         if (modeChanged || currentMode != lastMode)
         {
-            bool isDepth = (currentMode == SourceMode.Depth);
-            bool isColor = (currentMode == SourceMode.Color);
-            instantiatedMat.SetFloat("_IsDepthMode", isDepth ? 1.0f : 0.0f);
-            instantiatedMat.SetFloat("_IsColorMode", isColor ? 1.0f : 0.0f);
+            instantiatedMat.SetFloat("_IsDepthMode", currentMode == SourceMode.Depth ? 1f : 0f);
+            instantiatedMat.SetFloat("_IsColorMode", currentMode == SourceMode.Color ? 1f : 0f);
 
-            Texture baseTex = GetActiveBaseTexture();
-            if (baseTex != null)
-            {
-                UpdateCroppedTexture(baseTex);
-                instantiatedMat.SetTexture("_MainTex", baseTex);
-            }
+            Texture active = GetActiveBaseTexture();
+            if (active != null) instantiatedMat.SetTexture("_MainTex", active);
 
             lastMode = currentMode;
-        }
-
-        if (settings.UseBounds != lastUseBounds)
-        {
-            instantiatedMat.SetFloat("_UseBounds", settings.UseBounds ? 1.0f : 0.0f);
-            lastUseBounds = settings.UseBounds;
-        }
-
-        if (settings != null && (settings.FlipX != lastFlipX || settings.FlipY != lastFlipY))
-        {
-            instantiatedMat.SetFloat("_FlipX", settings.FlipX ? 1.0f : 0.0f);
-            instantiatedMat.SetFloat("_FlipY", settings.FlipY ? 1.0f : 0.0f);
-            lastFlipX = settings.FlipX;
-            lastFlipY = settings.FlipY;
         }
 
         if (!Mathf.Approximately(depthMin, lastDepthMin))
@@ -232,8 +259,8 @@ public class SourceTextureViewer : MonoBehaviour
         {
             instantiatedMat.SetFloat("_DepthMax", depthMax);
             lastDepthMax = depthMax;
-        }
-
+        }  
+         
         CheckSettingsBounds();
     }
 
@@ -243,28 +270,16 @@ public class SourceTextureViewer : MonoBehaviour
         {
             Rect b = settings.Playground;
 
-            Texture depthTex = SourceManager.instance != null ? SourceManager.instance.GetTexture(SourceMode.Depth) : null;
-            float texWidth = (depthTex != null && depthTex.width > 1) ? depthTex.width : 512f;
-            float texHeight = (depthTex != null && depthTex.height > 1) ? depthTex.height : 424f;
+            var sm = SourceManager.instance;
+            float fw = (sm != null && sm.SourceWidth > 1) ? sm.SourceWidth : 512f;
+            float fh = (sm != null && sm.SourceHeight > 1) ? sm.SourceHeight : 424f;
 
-            //bool invertY = settings.FlipY;
-            //float yMinN = invertY ? 1f - (b.yMax / texHeight) : (b.yMin / texHeight);
-            //float yMaxN = invertY ? 1f - (b.yMin / texHeight) : (b.yMax / texHeight);
-
-            float yMinN = b.yMin / texHeight;
-            float yMaxN = b.yMax / texHeight;
-
-            Vector4 normalizedBounds = new Vector4(
-                b.xMin / texWidth,
-                yMinN,
-                b.xMax / texWidth,
-                yMaxN
-            );
+            Vector4 normalizedBounds = new Vector4(b.xMin / fw, b.yMin / fh, b.xMax / fw, b.yMax / fh);
 
             if (normalizedBounds != lastBounds)
             {
-                instantiatedMat.SetVector("_Bounds", normalizedBounds);
-                lastBounds = normalizedBounds;
+                pendingBounds = normalizedBounds;
+                boundsDirty = true;
             }
         }
     }
@@ -293,17 +308,13 @@ public class SourceTextureViewer : MonoBehaviour
 
     private void CleanupTextures()
     {
-        if (CroppedTexture != null)
-        {
-            Destroy(CroppedTexture);
-            CroppedTexture = null;
-        }
-
         if (heightLUT != null)
         {
             Destroy(heightLUT);
             heightLUT = null;
         }
+
+        ReleaseCanvas();
     }
 
 #if UNITY_EDITOR
