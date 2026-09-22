@@ -57,8 +57,7 @@ this document is mostly about how those pieces talk to each other.
    - Press **F1** again (Tab not required this time) to exit — this saves the rect back into the
      `Settings` asset and into `StreamingAssets/settings.json`.
 
-   > **Heads up:** `FPSDisplay`'s default toggle key is also **Tab**. Holding Tab to enter
-   > calibration won't fire the FPS overlay, but it's worth knowing both systems use that key.
+   > **Heads up:** `FPSDisplay`'s uses a specific toggle key, you can change it with whatever key you'd like!.
 
 ---
 
